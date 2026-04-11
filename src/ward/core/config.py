@@ -22,12 +22,13 @@ class LLMConfig(BaseModel):
 
 class DatabaseConfig(BaseModel):
     sqlite_path: Path = Path("~/.ward/conversations.db")
-    chroma_path: Path = Path("~/.ward/chroma_db")
 
 
 class Config(BaseModel):
     llm: LLMConfig
     database: DatabaseConfig = DatabaseConfig()
+    web_host: str = "0.0.0.0"
+    web_port: int = 8000
 
 
 def load_config() -> Config:
@@ -36,8 +37,14 @@ def load_config() -> Config:
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
     model = os.environ.get("LLM_MODEL", "MiniMax-M2.7-highspeed")
 
+    # Web server
+    web_host = os.environ.get("WEB_HOST", "0.0.0.0")
+    web_port = int(os.environ.get("WEB_PORT", "8000"))
+
     return Config(
         llm=LLMConfig(api_key=api_key, base_url=base_url, model=model),
+        web_host=web_host,
+        web_port=web_port,
     )
 
 

@@ -29,4 +29,6 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    uvicorn.run("ward.app:app", host="0.0.0.0", port=8000, reload=True)
+    from ward.core.config import get_config
+    cfg = get_config()
+    uvicorn.run("ward.app:app", host=cfg.web_host, port=cfg.web_port, reload=True)
