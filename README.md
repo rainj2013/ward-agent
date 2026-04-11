@@ -185,4 +185,15 @@ ward-agent/
 
 ## License
 
-MIT
+MIT License — 保留署名即可随意使用，包括商业用途。
+
+---
+
+## 致谢
+
+本项目使用以下开源数据源：
+
+- [akshare](https://github.com/akfamily/akshare) — 东方财富、新浪财经等数据
+- [yfinance](https://github.com/ranaroussi/yfinance) — Yahoo Finance 美股数据
+- [ECharts](https://echarts.apache.org/) — K 线图可视化
+- [Marked](https://marked.js.org/) — Markdown 渲染
