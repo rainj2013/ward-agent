@@ -1,0 +1,22 @@
+# Environment (contains secrets)
+.env
+
+# Python
+**/__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+
+# Virtual env
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Local data
+~/.ward/

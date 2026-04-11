@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ward</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📈 Ward</h1>
+      <p class="subtitle">美股市场数据分析</p>
+      <div class="market-status" id="market-status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">检测中...</span>
+        <span id="refresh-countdown"></span>
+      </div>
+    </header>
+
+    <!-- Index Cards -->
+    <section class="cards" id="market-cards">
+      <div class="card" id="card-ixic">
+        <div class="card-header">
+          <span class="card-title">Nasdaq 综合</span>
+          <div class="card-header-right">
+            <span class="card-badge" style="display:none">收盘</span>
+            <span class="card-change" id="ixic-header-change"></span>
+          </div>
+          <span class="loading">加载中...</span>
+        </div>
+        <div class="card-body" style="display:none">
+          <div class="price" id="ixic-price">--</div>
+          <div class="change" id="ixic-change">--</div>
+          <div class="meta">
+            <span>开盘 <em id="ixic-open">--</em></span>
+            <span>最高 <em id="ixic-high">--</em></span>
+            <span>最低 <em id="ixic-low">--</em></span>
+            <span>成交量 <em id="ixic-volume">--</em></span>
+          </div>
+        </div>
+        <div class="card-footer" style="display:none">
+          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('ixic','Nasdaq 综合')">📊 K线图</button>
+        </div>
+        <div id="index-chart-ixic" class="index-chart-container" style="display:none"></div>
+      </div>
+
+      <div class="card" id="card-dji">
+        <div class="card-header">
+          <span class="card-title">道琼斯</span>
+          <div class="card-header-right">
+            <span class="card-badge" style="display:none">收盘</span>
+            <span class="card-change" id="dji-header-change"></span>
+          </div>
+          <span class="loading">加载中...</span>
+        </div>
+        <div class="card-body" style="display:none">
+          <div class="price" id="dji-price">--</div>
+          <div class="change" id="dji-change">--</div>
+          <div class="meta">
+            <span>开盘 <em id="dji-open">--</em></span>
+            <span>最高 <em id="dji-high">--</em></span>
+            <span>最低 <em id="dji-low">--</em></span>
+            <span>成交量 <em id="dji-volume">--</em></span>
+          </div>
+        </div>
+        <div class="card-footer" style="display:none">
+          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('dji','道琼斯')">📊 K线图</button>
+        </div>
+        <div id="index-chart-dji" class="index-chart-container" style="display:none"></div>
+      </div>
+
+      <div class="card" id="card-spx">
+        <div class="card-header">
+          <span class="card-title">标普 500</span>
+          <div class="card-header-right">
+            <span class="card-badge" style="display:none">收盘</span>
+            <span class="card-change" id="spx-header-change"></span>
+          </div>
+          <span class="loading">加载中...</span>
+        </div>
+        <div class="card-body" style="display:none">
+          <div class="price" id="spx-price">--</div>
+          <div class="change" id="spx-change">--</div>
+          <div class="meta">
+            <span>开盘 <em id="spx-open">--</em></span>
+            <span>最高 <em id="spx-high">--</em></span>
+            <span>最低 <em id="spx-low">--</em></span>
+            <span>成交量 <em id="spx-volume">--</em></span>
+          </div>
+        </div>
+        <div class="card-footer" style="display:none">
+          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('spx','标普 500')">📊 K线图</button>
+        </div>
+        <div id="index-chart-spx" class="index-chart-container" style="display:none"></div>
+      </div>
+    </section>
+
+    <!-- Index Chart Overlay (full-width, hidden by default) -->
+    <div id="index-chart-overlay" class="index-chart-overlay" style="display:none">
+      <div class="index-chart-overlay-header">
+        <span id="index-chart-overlay-title"></span>
+        <button class="index-chart-close-btn" onclick="closeIndexChartOverlay()">✕ 关闭</button>
+      </div>
+      <div id="index-chart-overlay-content" class="index-chart-overlay-content"></div>
+    </div>
+
+    <!-- Stock Search Section -->
+    <section class="stock-section">
+      <h2>🔍 个股查询</h2>
+      <div class="stock-search-row">
+        <input type="text" id="stock-search-input" placeholder="输入股票代码或名称，如 AAPL、NVDA" onkeydown="if(event.key==='Enter')searchStock()" />
+        <button onclick="searchStock()">搜索</button>
+      </div>
+      <div id="stock-results"></div>
+    </section>
+
+    <!-- AI Report Section -->
+    <section class="report-section">
+      <h2>🤖 AI 市场分析报告</h2>
+      <button id="generate-btn" onclick="generateReport()">生成报告</button>
+      <div id="report-content" class="report-content">
+        <p class="hint">点击上方按钮，AI 将基于今日数据生成分析报告</p>
+      </div>
+    </section>
+
+    <!-- Chat Section -->
+    <section class="chat-section">
+      <h2>💬 智能问答</h2>
+      <div class="chat-container">
+        <div class="chat-messages" id="chat-messages">
+          <div class="hint">输入问题，AI 基于实时市场数据为你解答</div>
+          <button id="chat-load-more-btn" onclick="loadMoreMessages()" style="display:none">加载更多消息</button>
+        </div>
+        <div class="chat-input-row">
+          <input type="text" id="chat-input" placeholder="例如：道琼斯今天涨了多少？" onkeydown="if(event.key==='Enter'&&!event.shiftKey)sendChat()" />
+          <button id="chat-send-btn" onclick="sendChat()">发送</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
