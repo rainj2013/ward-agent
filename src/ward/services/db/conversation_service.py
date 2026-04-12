@@ -82,24 +82,25 @@ class ConversationService:
             return [dict(row) for row in rows]
 
     def get_messages_paginated(self, conversation_id: int, limit: int = 20, before_id: int | None = None) -> tuple[list[dict[str, Any]], bool, int | None]:
-        """Fetch messages older than before_id (cursor pagination). Returns (messages, has_more, next_before_id)."""
+        """Fetch messages older than before_id (cursor pagination). Returns (messages, has_more, next_before_id) in ASC order (oldest first)."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             if before_id is None:
+                # Initial load: get newest messages first (DESC)
                 rows = conn.execute(
                     "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
                     (conversation_id, limit + 1),
                 ).fetchall()
             else:
+                # Load more: get older messages (ASC, older than before_id)
                 rows = conn.execute(
-                    "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? AND id < ? ORDER BY created_at DESC, id DESC LIMIT ?",
+                    "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? AND id < ? ORDER BY created_at ASC, id ASC LIMIT ?",
                     (conversation_id, before_id, limit + 1),
                 ).fetchall()
-            rows = list(reversed(rows))
             has_more = len(rows) > limit
             if has_more:
                 rows = rows[:limit]
-            next_before_id = rows[0]["id"] if rows and has_more else None
+            next_before_id = rows[-1]["id"] if rows and has_more else None
             return [dict(row) for row in rows], has_more, next_before_id
 
     def list_conversations(self, limit: int = 20) -> list[dict[str, Any]]:

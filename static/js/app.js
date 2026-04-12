@@ -16,6 +16,7 @@ const _indexKlineCache = {};    // prefix -> [{date, open, high, low, close, vol
 const _stockKlineCache = {};    // symbol -> [{date, open, high, low, close, volume}, ...]
 const _stockAnalysisCache = {}; // symbol -> string (AI analysis text)
 let _marketReportCache = null;  // string (market AI report)
+let _indexAnalysisCache = {};   // prefix -> string (index AI analysis text)
 
 function fmt(num) {
   if (num === null || num === undefined) return '--';
@@ -231,17 +232,24 @@ let _nextBeforeId = null;
 let _historyLoaded = false;
 
 async function initChat() {
-  if (!conversationId) return;
+  if (!conversationId) {
+    _historyLoaded = false; // fresh conversation
+    return;
+  }
   try {
-    const res = await fetch(`/api/history/${conversationId}/messages?limit=20`);
+    const res = await fetch(`/api/history/${conversationId}/messages?limit=10`);
     const data = await res.json();
     if (data.ok && data.messages && data.messages.length) {
       _hasMoreMessages = data.has_more;
       _nextBeforeId = data.next_before_id;
       renderMessages(data.messages);
       _historyLoaded = true;
+    } else {
+      _historyLoaded = true; // no messages but conversation exists
     }
-  } catch (_) {}
+  } catch (_) {
+    _historyLoaded = false;
+  }
 }
 
 function _msgToDiv(msg) {
@@ -261,23 +269,40 @@ function renderMessages(messages, prepend = false) {
   const loadMoreBtn = document.getElementById('chat-load-more-btn');
 
   if (prepend) {
-    // Insert before the "load more" button / hint
-    const beforeEl = loadMoreBtn || hint;
-    for (const msg of messages) {
-      container.insertBefore(_msgToDiv(msg), beforeEl);
-    }
-    loadMoreBtn.style.display = _hasMoreMessages ? 'block' : 'none';
-  } else {
-    // Full replace (initial load or refresh)
+    // prepend: older messages from "load more" — insert above current messages.
+    // messages come ASC [oldest→newest]; we want TOP chronological order.
+    // Strategy: save existing messages, clear container, rebuild as:
+    // [btn, ...newMessages, ...existingMessages]
+    const btn = document.getElementById('chat-load-more-btn');
+    const existingMsgs = Array.from(container.querySelectorAll('.chat-msg'));
+    if (btn) btn.remove();
     container.innerHTML = '';
+    // new older messages at top
     for (const msg of messages) {
       container.appendChild(_msgToDiv(msg));
     }
-    if (hint) container.appendChild(hint);
-    container.appendChild(loadMoreBtn);
-    loadMoreBtn.style.display = _hasMoreMessages ? 'block' : 'none';
+    // then existing messages
+    for (const div of existingMsgs) {
+      container.appendChild(div);
+    }
+    if (btn) container.insertBefore(btn, container.firstChild);
+  } else {
+    // Initial / full render: clear and show all messages.
+    // Backend returns DESC (newest→oldest) for initial load; reverse to oldest→newest.
+    const btn = document.getElementById('chat-load-more-btn');
+    if (btn) btn.remove(); // remove button before innerHTML = ''
+    container.innerHTML = '';
+    const sorted = [...messages].reverse();
+    for (const msg of sorted) {
+      container.appendChild(_msgToDiv(msg));
+    }
+    if (btn) container.insertBefore(btn, container.firstChild);
+    if (hint) hint.remove();
+    // Scroll to bottom so newest message is visible
     container.scrollTop = container.scrollHeight;
   }
+  // sync loadMoreBtn visibility
+  if (loadMoreBtn) loadMoreBtn.style.display = _hasMoreMessages ? 'block' : 'none';
 }
 
 async function loadMoreMessages() {
@@ -286,7 +311,7 @@ async function loadMoreMessages() {
   btn.disabled = true;
   btn.textContent = '加载中...';
   try {
-    const url = `/api/history/${conversationId}/messages?limit=20&before_id=${_nextBeforeId}`;
+    const url = `/api/history/${conversationId}/messages?limit=10&before_id=${_nextBeforeId}`;
     const res = await fetch(url);
     const data = await res.json();
     if (data.ok && data.messages.length) {
@@ -319,7 +344,7 @@ async function sendChat() {
   // Load existing conversation history if we have a conversation_id (e.g. after page refresh)
   if (conversationId && !_historyLoaded) {
     try {
-      const res = await fetch(`/api/history/${conversationId}/messages?limit=20`);
+      const res = await fetch(`/api/history/${conversationId}/messages?limit=10`);
       const data = await res.json();
       if (data.ok && data.messages && data.messages.length) {
         _hasMoreMessages = data.has_more;
@@ -338,7 +363,7 @@ async function sendChat() {
 
   try {
     // Build full context — everything loaded in the UI
-    const ctx = { indices: [], stocks: [], index_klines: {}, stock_klines: {}, stock_analyses: {}, market_report: null };
+    const ctx = { indices: [], stocks: [], index_klines: {}, stock_klines: {}, stock_analyses: {}, index_analyses: {} };
 
     // Today's snapshot — indices
     for (const prefix of ['ixic', 'dji', 'spx']) {
@@ -383,11 +408,13 @@ async function sendChat() {
     for (const [sym, text] of Object.entries(_stockAnalysisCache)) {
       if (text) ctx.stock_analyses[sym] = text;
     }
-    // Market AI report
-    if (_marketReportCache) ctx.market_report = _marketReportCache;
+    // Index AI reports (individual)
+    for (const [prefix, report] of Object.entries(_indexAnalysisCache)) {
+      if (report) ctx.index_analyses[prefix] = report;
+    }
 
     const payload = { conversation_id: conversationId, message };
-    if (ctx.indices.length || ctx.stocks.length || Object.keys(ctx.index_klines).length || Object.keys(ctx.stock_klines).length || Object.keys(ctx.stock_analyses).length || ctx.market_report) {
+    if (ctx.indices.length || ctx.stocks.length || Object.keys(ctx.index_klines).length || Object.keys(ctx.stock_klines).length || Object.keys(ctx.stock_analyses).length || Object.keys(ctx.index_analyses).length) {
       payload.context = ctx;
     }
 
@@ -428,22 +455,23 @@ async function sendChat() {
           convId = data.conversation_id;
           if (data.chunk) {
             fullReply += data.chunk;
-            // Only re-render markdown every ~20 chars to avoid excessive DOM ops
-            if (fullReply.length % 20 < (data.chunk.length || 0)) {
-              assistantDiv.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
-            }
+            assistantDiv.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
             container.scrollTop = container.scrollHeight;
           }
           if (data.done) {
-            // Final render with full content
             assistantDiv.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
             conversationId = convId;
             localStorage.setItem('ward_conversation_id', convId);
-            // Re-render full conversation history
-            if (data.messages && data.messages.length) {
-              renderMessages(data.messages);
-            }
+            // Streaming already put user + assistant messages into the DOM.
+            // done: only sync pagination state — never re-render.
+            if (data.has_more !== undefined) _hasMoreMessages = data.has_more;
+            if (data.next_before_id !== undefined) _nextBeforeId = data.next_before_id;
+            const loadMoreBtn = document.getElementById('chat-load-more-btn');
+            if (loadMoreBtn) loadMoreBtn.style.display = _hasMoreMessages ? 'block' : 'none';
             done = true;
+          } else {
+            // Chunk received: scroll to keep newest message visible
+            container.scrollTop = container.scrollHeight;
           }
         } catch (e) {}
       }
@@ -459,6 +487,38 @@ async function sendChat() {
     btn.textContent = '发送';
   }
 }
+
+function handleIndexAnalyze(prefix, name, btn) {
+    const container = document.getElementById('analysis-' + prefix);
+    const savedReport = _indexAnalysisCache && _indexAnalysisCache[prefix];
+    const wasVisible = container && container.style.display === 'block';
+    if (wasVisible && savedReport) {
+      container.style.display = 'none';
+      return;
+    }
+    btn.textContent = '分析中...';
+    btn.disabled = true;
+    fetch('/api/index/' + prefix + '/analyze')
+      .then(r => r.json())
+      .then(data => {
+        btn.textContent = '🧠 AI分析';
+        btn.disabled = false;
+        if (!data.ok || !data.report) {
+          container.innerHTML = '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-error">分析失败: ' + (data.error || '未知错误') + '</div>';
+        } else {
+          container.innerHTML = '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-analysis-content">' + (typeof marked !== 'undefined' ? marked.parse(data.report) : escapeHtml(data.report)) + '</div>';
+          if (!_indexAnalysisCache) _indexAnalysisCache = {};
+          _indexAnalysisCache[prefix] = data.report;
+        }
+        container.style.display = 'block';
+      })
+      .catch(err => {
+        btn.textContent = '🧠 AI分析';
+        btn.disabled = false;
+        container.innerHTML = '<h3>分析报告</h3><div class="stock-error">请求失败: ' + err.message + '</div>';
+        container.style.display = 'block';
+      });
+  }
 
 function handleAnalyzeAction(symbol, name, btn) {
     const container = document.getElementById('analysis-' + symbol);

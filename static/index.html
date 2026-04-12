@@ -42,6 +42,7 @@
           </div>
         </div>
         <div class="card-footer" style="display:none">
+          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('ixic','Nasdaq 综合',this)">🧠 AI分析</button>
           <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('ixic','Nasdaq 综合')">📊 K线图</button>
         </div>
         <div id="index-chart-ixic" class="index-chart-container" style="display:none"></div>
@@ -67,6 +68,7 @@
           </div>
         </div>
         <div class="card-footer" style="display:none">
+          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('dji','道琼斯',this)">🧠 AI分析</button>
           <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('dji','道琼斯')">📊 K线图</button>
         </div>
         <div id="index-chart-dji" class="index-chart-container" style="display:none"></div>
@@ -92,11 +94,17 @@
           </div>
         </div>
         <div class="card-footer" style="display:none">
+          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('spx','标普 500',this)">🧠 AI分析</button>
           <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('spx','标普 500')">📊 K线图</button>
         </div>
         <div id="index-chart-spx" class="index-chart-container" style="display:none"></div>
       </div>
     </section>
+
+    <!-- Index AI Analysis containers (one per index, shown below respective card) -->
+    <section id="analysis-ixic" class="stock-analysis-section" style="display:none"></section>
+    <section id="analysis-dji"  class="stock-analysis-section" style="display:none"></section>
+    <section id="analysis-spx"  class="stock-analysis-section" style="display:none"></section>
 
     <!-- Index Chart Overlay (full-width, hidden by default) -->
     <div id="index-chart-overlay" class="index-chart-overlay" style="display:none">
@@ -131,8 +139,8 @@
       <h2>💬 智能问答</h2>
       <div class="chat-container">
         <div class="chat-messages" id="chat-messages">
-          <div class="hint">输入问题，AI 基于实时市场数据为你解答</div>
           <button id="chat-load-more-btn" onclick="loadMoreMessages()" style="display:none">加载更多消息</button>
+          <div class="hint">输入问题，AI 基于实时市场数据为你解答</div>
         </div>
         <div class="chat-input-row">
           <input type="text" id="chat-input" placeholder="例如：道琼斯今天涨了多少？" onkeydown="if(event.key==='Enter'&&!event.shiftKey)sendChat()" />

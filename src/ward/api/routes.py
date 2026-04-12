@@ -11,6 +11,7 @@ from ward.schemas.models import (
     ChatRequest,
     ChatResponse,
     HistoryResponse, HistoryPaginatedResponse,
+    IndexAnalysisResponse,
     MarketOverviewResponse,
     MessageResponse,
     QuoteResponse,
@@ -22,6 +23,7 @@ from ward.schemas.models import (
     StockSearchResponse,
 )
 from ward.services.chat_service import ChatService
+from ward.services.index_service import IndexService
 from ward.services.nasdaq_service import MarketService
 from ward.services.report_service import ReportService
 from ward.services.stock_service import StockService
@@ -31,6 +33,7 @@ ms = MarketService()
 rs = ReportService()
 cs = ChatService()
 ss = StockService()
+is_ = IndexService()
 
 _static_dir = Path(__file__).parent.parent.parent.parent / "static"
 
@@ -98,6 +101,20 @@ async def get_market_overview():
     )
 
 
+@router.get("/api/index/{prefix}/analyze", response_model=IndexAnalysisResponse)
+async def analyze_index(prefix: str):
+    """Generate AI-powered analysis for a single US index (ixic / spx / dji)."""
+    result = is_.generate_analysis(prefix)
+    return IndexAnalysisResponse(
+        ok=result.get("ok", False),
+        prefix=result.get("prefix"),
+        name=result.get("name"),
+        report=result.get("report"),
+        data=result.get("data"),
+        error=result.get("error"),
+    )
+
+
 @router.get("/api/report", response_model=ReportResponse)
 async def generate_report():
     """Generate LLM-powered market report."""
@@ -124,8 +141,14 @@ async def chat(req: ChatRequest):
 
 
 async def chat_event_generator(result, conversation_id):
-    for chunk in result:
-        # Use chunk's conversation_id (generated inside chat_stream) if available
+    import asyncio
+    loop = asyncio.get_running_loop()
+    iterator = iter(result)
+    while True:
+        try:
+            chunk = await loop.run_in_executor(None, next, iterator)
+        except StopIteration:
+            break
         conv_id = chunk.get("conversation_id", conversation_id)
         if chunk.get("ok"):
             data = json.dumps({

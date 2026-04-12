@@ -81,8 +81,11 @@ class ChatService:
                 for sym, report in context.stock_analyses.items():
                     if report:
                         parts.append(f"【{sym} AI分析报告】\n{report}")
-            if context.market_report:
-                parts.append(f"【市场AI分析报告】\n{context.market_report}")
+            if context.index_analyses:
+                for prefix, report in context.index_analyses.items():
+                    if report:
+                        index_name = {"ixic": "纳斯达克综合", "dji": "道琼斯", "spx": "标普500"}.get(prefix, prefix)
+                        parts.append(f"【{index_name} AI分析报告】\n{report}")
             if parts:
                 card_ctx = "\n\n当前界面已加载的数据（可优先参考）：\n" + "\n\n".join(parts)
         return SYSTEM_PROMPT.format(

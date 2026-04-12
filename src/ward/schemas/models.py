@@ -51,8 +51,8 @@ class ChatContext(BaseModel):
     stock_klines: dict[str, list[KlineItem]] = {}
     # AI analysis texts keyed by stock symbol
     stock_analyses: dict[str, str] = {}
-    # Market AI report text (from generateReport)
-    market_report: str | None = None
+    # Index AI analysis reports: prefix -> report text
+    index_analyses: dict[str, str] = {}
 
 
 # ─── Request / Response Schemas ──────────────────────────────────────────────
@@ -149,4 +149,13 @@ class StockKlineResponse(BaseModel):
     symbol: str | None = None
     name: str | None = None
     data: list[dict] = []
+    error: str | None = None
+
+
+class IndexAnalysisResponse(BaseModel):
+    ok: bool
+    prefix: str | None = None
+    name: str | None = None
+    report: str | None = None
+    data: dict | None = None
     error: str | None = None
