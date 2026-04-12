@@ -192,6 +192,34 @@ ward-agent/
 
 ---
 
+## Roadmap
+
+### Phase 6 — Worker / Reviewer 角色分离
+- [ ] 指数和个股 AI 分析各自独立的 Worker Agent
+- [ ] Reviewer Agent 对报告打分，不合格自动重写（最多 3 次）
+- [ ] 明确的停止条件：格式正确 + 技术指标覆盖完整 + 无事实性错误
+
+### Phase 7 — 外部 Tool Calling
+- [ ] AkShare / yfinance 接口标准化
+- [ ] 封装 LLM 可调用的工具：get_stock_quote、get_stock_news、get_market_sentiment、search_stock
+- [ ] 智能问答支持主动获取页面之外的信息（新闻、财报日历等）
+
+### Phase 8 — 外部测试验证
+- [ ] 从 AI 分析报告中提取关键断言
+- [ ] 用 K 线数据自动校验断言正确性
+- [ ] 不一致时标记可疑并要求重写
+
+### Phase 9 — 短反馈循环
+- [ ] Worker 分段输出，段落级别 Reviewer 检查
+- [ ] 发现问题立即中断，而不是等全文完成
+
+### Phase 10 — 智能上下文管理
+- [ ] 基于语义相似度的上下文压缩（embedding 向量检索）
+- [ ] 分层记忆：短期（最近对话）+ 中期（市场摘要）+ 长期（用户偏好）
+- [ ] 多 Agent 协作调度
+
+---
+
 ## License
 
 MIT License — 保留署名即可随意使用，包括商业用途。
