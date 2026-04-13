@@ -101,6 +101,67 @@
       </div>
     </section>
 
+    <!-- Extended Hours Bar -->
+    <section class="extended-section" id="extended-section" style="display:none">
+      <div class="extended-header">
+        <span class="extended-title">🕐 盘前 / 盘中 / 盘后</span>
+        <span class="extended-subtitle">数据来源：ETF（QQQ / SPY / DIA）</span>
+      </div>
+      <div class="extended-row">
+        <div class="ext-card" id="ext-ixic">
+          <div class="ext-card-label">Nasdaq 综合</div>
+          <div class="ext-slots">
+            <div class="ext-slot" id="ext-ixic-pre">
+              <span class="ext-slot-label">盘前</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+            <div class="ext-slot ext-slot-reg" id="ext-ixic-reg">
+              <span class="ext-slot-label">盘中</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+            <div class="ext-slot" id="ext-ixic-after">
+              <span class="ext-slot-label">盘后</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+          </div>
+        </div>
+        <div class="ext-card" id="ext-spx">
+          <div class="ext-card-label">标普 500</div>
+          <div class="ext-slots">
+            <div class="ext-slot" id="ext-spx-pre">
+              <span class="ext-slot-label">盘前</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+            <div class="ext-slot ext-slot-reg" id="ext-spx-reg">
+              <span class="ext-slot-label">盘中</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+            <div class="ext-slot" id="ext-spx-after">
+              <span class="ext-slot-label">盘后</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+          </div>
+        </div>
+        <div class="ext-card" id="ext-dji">
+          <div class="ext-card-label">道琼斯</div>
+          <div class="ext-slots">
+            <div class="ext-slot" id="ext-dji-pre">
+              <span class="ext-slot-label">盘前</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+            <div class="ext-slot ext-slot-reg" id="ext-dji-reg">
+              <span class="ext-slot-label">盘中</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+            <div class="ext-slot" id="ext-dji-after">
+              <span class="ext-slot-label">盘后</span>
+              <span class="ext-slot-price loading">--</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Index AI Analysis containers (one per index, shown below respective card) -->
     <section id="analysis-ixic" class="stock-analysis-section" style="display:none"></section>
     <section id="analysis-dji"  class="stock-analysis-section" style="display:none"></section>
@@ -150,6 +211,6 @@
     </section>
   </div>
 
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=3"></script>
 </body>
 </html>
