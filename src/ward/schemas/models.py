@@ -32,13 +32,21 @@ class StockDataItem(BaseModel):
 
 
 class KlineItem(BaseModel):
-    """Single OHLCV kline bar."""
+    """OHLCV bar for a single trading day."""
     date: str
     open: float
     high: float
     low: float
     close: float
     volume: float
+
+
+class ExtendedHoursItem(BaseModel):
+    """Pre-market / regular / after-hours snapshot for an index (via ETF)."""
+    pre: dict | None = None       # {"price": float}
+    regular: dict | None = None   # {"price": float}
+    after: dict | None = None     # {"price": float}
+    previous_close: float = 0
 
 
 class ChatContext(BaseModel):
@@ -53,6 +61,8 @@ class ChatContext(BaseModel):
     stock_analyses: dict[str, str] = {}
     # Index AI analysis reports: prefix -> report text
     index_analyses: dict[str, str] = {}
+    # Extended hours data: prefix -> ExtendedHoursItem
+    extended_hours: dict[str, ExtendedHoursItem] = {}
 
 
 # ─── Request / Response Schemas ──────────────────────────────────────────────
@@ -158,4 +168,16 @@ class IndexAnalysisResponse(BaseModel):
     name: str | None = None
     report: str | None = None
     data: dict | None = None
+    error: str | None = None
+
+
+class ExtendedPriceResponse(BaseModel):
+    ok: bool
+    symbol: str | None = None
+    name: str | None = None
+    date: str | None = None
+    pre_market: dict | None = None  # {"price": float, "time": str}
+    regular: dict | None = None     # {"price": float, "time": str}
+    after_hours: dict | None = None  # {"price": float, "time": str}
+    previous_close: float | None = None
     error: str | None = None

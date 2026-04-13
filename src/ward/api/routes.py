@@ -10,6 +10,7 @@ from pathlib import Path
 from ward.schemas.models import (
     ChatRequest,
     ChatResponse,
+    ExtendedPriceResponse,
     HistoryResponse, HistoryPaginatedResponse,
     IndexAnalysisResponse,
     MarketOverviewResponse,
@@ -265,5 +266,22 @@ async def analyze_stock(symbol: str):
         name=result.get("name"),
         report=result.get("report"),
         data=result.get("data"),
+        error=result.get("error"),
+    )
+
+
+@router.get("/api/stock/{symbol}/extended", response_model=ExtendedPriceResponse)
+async def get_extended_price(symbol: str):
+    """Get pre-market / regular / after-hours prices for a stock or index."""
+    result = ss.get_extended_price(symbol)
+    return ExtendedPriceResponse(
+        ok=result.get("ok", False),
+        symbol=result.get("symbol"),
+        name=result.get("name"),
+        date=result.get("date"),
+        pre_market=result.get("pre_market"),
+        regular=result.get("regular"),
+        after_hours=result.get("after_hours"),
+        previous_close=result.get("previous_close"),
         error=result.get("error"),
     )
