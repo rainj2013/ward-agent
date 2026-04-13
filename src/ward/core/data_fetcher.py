@@ -6,14 +6,65 @@ from datetime import datetime
 from typing import Any
 
 import akshare as ak
+import yfinance as yf
+
+
+# yfinance symbol mapping for US indices
+_INDEX_YF_SYMBOLS = {
+    ".IXIC": "^IXIC",
+    ".NDX": "^NDX",
+    ".DJI": "^DJI",
+    ".INX": "^GSPC",
+}
 
 
 class DataFetcher:
     """Unified data fetching via AKShare."""
 
     @staticmethod
+    def _yf_index_quote(sina_symbol: str) -> dict[str, Any] | None:
+        """Fetch index quote via yfinance. Returns None on failure."""
+        yf_symbol = _INDEX_YF_SYMBOLS.get(sina_symbol)
+        if not yf_symbol:
+            return None
+        try:
+            ticker = yf.Ticker(yf_symbol)
+            hist = ticker.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                return None
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2]
+            close = float(latest["Close"])
+            prev_close = float(prev["Close"])
+            change = round(close - prev_close, 2)
+            change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
+            return {
+                "symbol": sina_symbol,
+                "name": {
+                    ".IXIC": "Nasdaq Composite",
+                    ".NDX": "Nasdaq 100",
+                    ".DJI": "Dow Jones",
+                    ".INX": "S&P 500",
+                }.get(sina_symbol, sina_symbol),
+                "date": str(latest.name.date()),
+                "close": close,
+                "open": float(latest["Open"]),
+                "high": float(latest["High"]),
+                "low": float(latest["Low"]),
+                "volume": float(latest["Volume"]),
+                "change": change,
+                "change_pct": change_pct,
+            }
+        except Exception:
+            return None
+
+    @staticmethod
     def get_nasdaq_quote() -> dict[str, Any]:
-        """Fetch Nasdaq Composite (.IXIC) quote."""
+        """Fetch Nasdaq Composite (.IXIC) quote via yfinance."""
+        data = DataFetcher._yf_index_quote(".IXIC")
+        if data:
+            return data
+        # Fallback to AKShare Sina
         try:
             df = ak.index_us_stock_sina(symbol=".IXIC")
             latest = df.iloc[-1]
@@ -39,7 +90,10 @@ class DataFetcher:
 
     @staticmethod
     def get_nasdaq_100_quote() -> dict[str, Any]:
-        """Fetch Nasdaq 100 (.NDX) quote."""
+        """Fetch Nasdaq 100 (.NDX) quote via yfinance."""
+        data = DataFetcher._yf_index_quote(".NDX")
+        if data:
+            return data
         try:
             df = ak.index_us_stock_sina(symbol=".NDX")
             latest = df.iloc[-1]
@@ -74,7 +128,10 @@ class DataFetcher:
 
     @staticmethod
     def get_dji_quote() -> dict[str, Any]:
-        """Fetch Dow Jones Industrial Average (.DJI) quote."""
+        """Fetch Dow Jones Industrial Average (.DJI) quote via yfinance."""
+        data = DataFetcher._yf_index_quote(".DJI")
+        if data:
+            return data
         try:
             df = ak.index_us_stock_sina(symbol=".DJI")
             latest = df.iloc[-1]
@@ -100,7 +157,10 @@ class DataFetcher:
 
     @staticmethod
     def get_spx_quote() -> dict[str, Any]:
-        """Fetch S&P 500 (.INX) quote."""
+        """Fetch S&P 500 (.INX) quote via yfinance."""
+        data = DataFetcher._yf_index_quote(".INX")
+        if data:
+            return data
         try:
             df = ak.index_us_stock_sina(symbol=".INX")
             latest = df.iloc[-1]
