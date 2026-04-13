@@ -989,9 +989,9 @@ function renderStockChart(container, symbol, name, klineData) {
     ],
     legend: {
       data: [
-        { name: 'MA5', textStyle: { color: '#f59e0b', fontSize: 10 } },
-        { name: 'MA20', textStyle: { color: '#a78bfa', fontSize: 10 } },
-        { name: 'MA60', textStyle: { color: '#38bdf8', fontSize: 10 } },
+        { name: 'MA5', itemStyle: { color: '#f59e0b' }, textStyle: { color: '#f59e0b', fontSize: 10 } },
+        { name: 'MA20', itemStyle: { color: '#a78bfa' }, textStyle: { color: '#a78bfa', fontSize: 10 } },
+        { name: 'MA60', itemStyle: { color: '#38bdf8' }, textStyle: { color: '#38bdf8', fontSize: 10 } },
       ],
       orient: 'horizontal',
       bottom: 4,
