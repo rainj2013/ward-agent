@@ -86,6 +86,14 @@ class ChatService:
                     if report:
                         index_name = {"ixic": "纳斯达克综合", "dji": "道琼斯", "spx": "标普500"}.get(prefix, prefix)
                         parts.append(f"【{index_name} AI分析报告】\n{report}")
+            if context.extended_hours:
+                for prefix, eh in context.extended_hours.items():
+                    index_name = {"ixic": "纳斯达克综合", "dji": "道琼斯", "spx": "标普500"}.get(prefix, prefix)
+                    prev = eh.previous_close or 0
+                    pre_line = f"盘前: {eh.pre['price']:.2f} ({eh.pre['price']-prev:+.2f} / {((eh.pre['price']-prev)/prev*100):+.2f}%)" if eh.pre else "盘前: --"
+                    reg_line = f"盘中: {eh.regular['price']:.2f} ({eh.regular['price']-prev:+.2f} / {((eh.regular['price']-prev)/prev*100):+.2f}%)" if eh.regular else "盘中: --"
+                    aft_line = f"盘后: {eh.after['price']:.2f} ({eh.after['price']-prev:+.2f} / {((eh.after['price']-prev)/prev*100):+.2f}%)" if eh.after else "盘后: --"
+                    parts.append(f"【{index_name} 盘前/盘中/盘后】\n  {pre_line}\n  {reg_line}\n  {aft_line}")
             if parts:
                 card_ctx = "\n\n当前界面已加载的数据（可优先参考）：\n" + "\n\n".join(parts)
         return SYSTEM_PROMPT.format(

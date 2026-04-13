@@ -7,9 +7,10 @@ let refreshTimer = null;
 
 // Cache for card data — used to build chat context
 const _cardCache = {
-  indices: {},   // prefix -> {name, close, change, change_pct, open, high, low, volume}
-  stocks: {},    // symbol -> {name, close, change, change_pct, open, high, low, volume}
+  indices: {},
+  stocks: {},
 };
+const _extendedCache = {}; // prefix -> { pre, regular, after, previous_close }
 
 // Extended caches for chat context
 const _indexKlineCache = {};    // prefix -> [{date, open, high, low, close, volume}, ...]
@@ -168,10 +169,93 @@ async function loadMarketData() {
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         loadMarketData();
+        loadExtendedHours();
       }, REFRESH_INTERVAL * 1000);
     }
   } catch (e) {
     console.error('Failed to load market data:', e);
+  }
+}
+
+// Map index prefix to ETF symbols for extended hours
+const EXTENDED_SYMBOLS = {
+  ixic: 'QQQ',
+  spx: 'SPY',
+  dji: 'DIA',
+};
+
+async function loadExtendedHours() {
+  const section = document.getElementById('extended-section');
+  try {
+    const results = await Promise.all([
+      fetch('/api/stock/QQQ/extended').then(r => r.json()),
+      fetch('/api/stock/SPY/extended').then(r => r.json()),
+      fetch('/api/stock/DIA/extended').then(r => r.json()),
+    ]);
+
+    const prefixes = ['ixic', 'spx', 'dji'];
+    let hasData = false;
+
+    for (let i = 0; i < prefixes.length; i++) {
+      const prefix = prefixes[i];
+      const d = results[i];
+      if (!d.ok) continue;
+
+      hasData = true;
+
+      // Fill pre-market
+      const pre = d.pre_market;
+      const preEl = document.querySelector(`#ext-${prefix}-pre .ext-slot-price`);
+      if (pre && pre.price) {
+        const chg = pre.price - d.previous_close;
+        const pct = (chg / d.previous_close * 100).toFixed(2);
+        preEl.textContent = `${pre.price.toLocaleString()} (${chg >= 0 ? '+' : ''}${pct}%)`;
+        preEl.className = `ext-slot-price ${chg >= 0 ? 'positive' : 'negative'}`;
+      } else {
+        preEl.textContent = '--';
+        preEl.className = 'ext-slot-price loading';
+      }
+
+      // Fill regular
+      const reg = d.regular;
+      const regEl = document.querySelector(`#ext-${prefix}-reg .ext-slot-price`);
+      if (reg && reg.price) {
+        const chg = reg.price - d.previous_close;
+        const pct = (chg / d.previous_close * 100).toFixed(2);
+        regEl.textContent = `${reg.price.toLocaleString()} (${chg >= 0 ? '+' : ''}${pct}%)`;
+        regEl.className = `ext-slot-price ${chg >= 0 ? 'positive' : 'negative'}`;
+      } else {
+        regEl.textContent = '--';
+        regEl.className = 'ext-slot-price loading';
+      }
+
+      // Fill after-hours
+      const after = d.after_hours;
+      const afterEl = document.querySelector(`#ext-${prefix}-after .ext-slot-price`);
+      if (after && after.price) {
+        const chg = after.price - reg.price;
+        const pct = (chg / reg.price * 100).toFixed(2);
+        afterEl.textContent = `${after.price.toLocaleString()} (${chg >= 0 ? '+' : ''}${pct}%)`;
+        afterEl.className = `ext-slot-price ${chg >= 0 ? 'positive' : 'negative'}`;
+      } else {
+        afterEl.textContent = '--';
+        afterEl.className = 'ext-slot-price loading';
+      }
+
+      // Cache for chat context (after variable declarations)
+      _extendedCache[prefix] = {
+        pre: pre && pre.price ? { price: pre.price } : null,
+        regular: reg && reg.price ? { price: reg.price } : null,
+        after: after && after.price ? { price: after.price } : null,
+        previous_close: d.previous_close,
+      };
+    }
+
+    if (hasData) {
+      section.style.display = 'block';
+    }
+  } catch (e) {
+    console.error('Failed to load extended hours:', e);
   }
 }
 
@@ -363,7 +447,7 @@ async function sendChat() {
 
   try {
     // Build full context — everything loaded in the UI
-    const ctx = { indices: [], stocks: [], index_klines: {}, stock_klines: {}, stock_analyses: {}, index_analyses: {} };
+    const ctx = { indices: [], stocks: [], index_klines: {}, stock_klines: {}, stock_analyses: {}, index_analyses: {}, extended_hours: {} };
 
     // Today's snapshot — indices
     for (const prefix of ['ixic', 'dji', 'spx']) {
@@ -403,6 +487,11 @@ async function sendChat() {
     // 60-day klines — stocks
     for (const [sym, bars] of Object.entries(_stockKlineCache)) {
       if (bars && bars.length) ctx.stock_klines[sym] = bars;
+    }
+    // Extended hours data — indices
+    for (const [prefix, data] of Object.entries(_extendedCache)) {
+      if (data) ctx.extended_hours = ctx.extended_hours || {};
+      ctx.extended_hours[prefix] = data;
     }
     // Stock AI analyses
     for (const [sym, text] of Object.entries(_stockAnalysisCache)) {
@@ -578,6 +667,7 @@ function handleAnalyzeAction(symbol, name, btn) {
 
 document.addEventListener('DOMContentLoaded', () => {
   loadMarketData();
+  loadExtendedHours();
 
   // Delegated button clicks — data-action buttons inside stock cards
   document.addEventListener('click', (e) => {
@@ -864,8 +954,8 @@ function renderStockChart(container, symbol, name, klineData) {
     backgroundColor: 'transparent',
     animation: true,
     title: {
-      text: `${symbol} K线`,
-      subtext: name,
+      text: `${name} K线`,
+      subtext: '',
       textStyle: { color: '#38bdf8', fontSize: 14, fontWeight: '600' },
       subtextStyle: { color: '#64748b', fontSize: 11 },
       left: 'center',
@@ -1008,11 +1098,11 @@ function renderStockChart(container, symbol, name, klineData) {
   _chartResizeObserver.observe(container);
 }
 
-// Map index prefix to API symbol
+// Map index prefix to yfinance-compatible symbols (NOT Sina symbols)
 const INDEX_SYMBOLS = {
-  ixic: '.IXIC',
-  dji: '.DJI',
-  spx: '.INX',
+  ixic: '^IXIC',
+  dji: '^DJI',
+  spx: '^GSPC',
 };
 
 // Track which index chart is currently in overlay mode
