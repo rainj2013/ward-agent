@@ -483,12 +483,21 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
         """Fetch quote via yfinance. Returns None on failure."""
         try:
             ticker = yf.Ticker(symbol)
-            info = ticker.fast_info
+            # Use info dict for current price — it has currentPrice/previousClose which
+            # fast_info doesn't reliably return after hours. fast_info used for
+            # market_cap / exchange / currency (cached, no extra API call).
+            info = ticker.info or {}
             hist = ticker.history(period="5d")
 
-            # Extract current price
-            price = info.get("price") or (hist["Close"].iloc[-1] if not hist.empty else None)
-            prev_close = info.get("previous_close") or (hist["Close"].iloc[-2] if len(hist) > 1 else None)
+            # currentPrice from info (most up-to-date for last close)
+            price = info.get("currentPrice") or info.get("regularMarketPrice")
+            prev_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
+
+            # Fallback to history if info doesn't have price
+            if price is None and not hist.empty:
+                price = hist["Close"].iloc[-1]
+            if prev_close is None and len(hist) > 1:
+                prev_close = hist["Close"].iloc[-2]
 
             if price is None:
                 return None
@@ -504,12 +513,9 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
             else:
                 day_high = day_low = volume = 0
 
-            # Full info (first 5d history)
-            full_info = ticker.info or {}
-
-            # 52-week range
-            fifty_two_high = full_info.get("fifty_two_week_high")
-            fifty_two_low = full_info.get("fifty_two_week_low")
+            # 52-week range from info
+            fifty_two_high = info.get("fiftyTwoWeekHigh")
+            fifty_two_low = info.get("fiftyTwoWeekLow")
 
             return {
                 "symbol": symbol,
@@ -518,28 +524,28 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
                 "price": round(float(price), 2),
                 "previous_close": round(float(prev_close), 2) if prev_close else None,
                 "open": round(float(info.get("open") or hist["Open"].iloc[-1] if not hist.empty else 0), 2),
-                "high": round(day_high, 2),
-                "low": round(day_low, 2),
+                "high": round(float(info.get("dayHigh") or info.get("regularMarketDayHigh") or day_high), 2),
+                "low": round(float(info.get("dayLow") or info.get("regularMarketDayLow") or day_low), 2),
                 "volume": volume,
                 "change": change,
                 "change_pct": change_pct,
-                "market_cap": info.get("market_cap"),
-                "pe_ratio": full_info.get("trailingPE"),
-                "forward_pe": full_info.get("forwardPE"),
-                "dividend_yield": full_info.get("dividendYield"),
-                "revenue_growth": full_info.get("revenueGrowth"),
-                "profit_margin": full_info.get("profitMargins"),
+                "market_cap": info.get("marketCap"),
+                "pe_ratio": info.get("trailingPE"),
+                "forward_pe": info.get("forwardPE"),
+                "dividend_yield": info.get("dividendYield"),
+                "revenue_growth": info.get("revenueGrowth"),
+                "profit_margin": info.get("profitMargins"),
                 "fifty_two_week_high": fifty_two_high,
                 "fifty_two_week_low": fifty_two_low,
                 "currency": info.get("currency", "USD"),
                 "exchange": info.get("exchange", "NMS"),
                 "data_source": "yfinance",
-                "recommendation": full_info.get("recommendationKey", "无数据"),
+                "recommendation": info.get("recommendationKey", "无数据"),
                 "analyst_targets": {
-                    "target_low": full_info.get("targetLowPrice", "无数据"),
-                    "target_high": full_info.get("targetHighPrice", "无数据"),
-                    "target_mean": full_info.get("targetMeanPrice", "无数据"),
-                    "target_upside": full_info.get("targetUpside", "无数据"),
+                    "target_low": info.get("targetLowPrice", "无数据"),
+                    "target_high": info.get("targetHighPrice", "无数据"),
+                    "target_mean": info.get("targetMeanPrice", "无数据"),
+                    "target_upside": info.get("targetUpside", "无数据"),
                 },
             }
         except Exception:
@@ -706,3 +712,56 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
             return records
         except Exception:
             return None
+
+    def get_extended_price(self, symbol: str) -> dict[str, Any]:
+        """Get pre-market / regular / after-hours prices via yfinance hourly prepost data."""
+        symbol = symbol.upper()
+        try:
+            ticker = yf.Ticker(symbol)
+            fi = ticker.fast_info
+            pp = fi._get_1wk_1h_prepost_prices()
+
+            if pp is None or pp.empty:
+                return {"ok": False, "error": "No extended hours data available"}
+
+            # Find the last trading day in the data
+            last_ts = pp.index[-1]
+            last_date = last_ts.date()
+
+            today_data = pp[pp.index >= pd.Timestamp(last_date, tz="America/New_York")]
+
+            # Pre-market: before 09:30 ET
+            pre_mask = today_data.index.time < pd.Timestamp("09:30").time()
+            pre = today_data[pre_mask]
+            pre_price = round(float(pre["Close"].iloc[-1]), 2) if len(pre) else None
+            pre_time = pre.index[-1].strftime("%H:%M") if len(pre) else None
+
+            # Regular market: 09:30 - 16:00 ET
+            reg_mask = (today_data.index.time >= pd.Timestamp("09:30").time()) & (
+                today_data.index.time <= pd.Timestamp("16:00").time()
+            )
+            reg = today_data[reg_mask]
+            reg_price = round(float(reg["Close"].iloc[-1]), 2) if len(reg) else None
+            reg_time = reg.index[-1].strftime("%H:%M") if len(reg) else None
+
+            # After-hours: 16:00 onwards
+            after_mask = today_data.index.time >= pd.Timestamp("16:00").time()
+            after = today_data[after_mask]
+            after_price = round(float(after["Close"].iloc[-1]), 2) if len(after) else None
+            after_time = after.index[-1].strftime("%H:%M") if len(after) else None
+
+            info = ticker.info or {}
+            prev = info.get("regularMarketPreviousClose") or info.get("previousClose")
+
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "name": POPULAR_STOCKS.get(symbol, symbol),
+                "date": str(last_date),
+                "pre_market": {"price": pre_price, "time": pre_time},
+                "regular": {"price": reg_price, "time": reg_time},
+                "after_hours": {"price": after_price, "time": after_time},
+                "previous_close": prev,
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
