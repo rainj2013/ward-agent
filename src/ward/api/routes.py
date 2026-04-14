@@ -266,6 +266,7 @@ async def analyze_stock(symbol: str):
         name=result.get("name"),
         report=result.get("report"),
         data=result.get("data"),
+        cached=result.get("cached"),
         error=result.get("error"),
     )
 

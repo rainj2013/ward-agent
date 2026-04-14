@@ -151,6 +151,7 @@ class StockAnalysisResponse(BaseModel):
     name: str | None = None
     report: str | None = None
     data: dict | None = None
+    cached: bool | None = None
     error: str | None = None
 
 

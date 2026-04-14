@@ -13,6 +13,7 @@ import yfinance as yf
 from anthropic import Anthropic
 
 from ward.core.config import get_config
+from ward.services.db.analysis_cache_service import AnalysisCacheService
 
 # Supported indices: (yfinance_symbol, display_name, description)
 SUPPORTED_INDICES = {
@@ -89,6 +90,7 @@ class IndexService:
     def __init__(self):
         cfg = get_config()
         self._client = Anthropic(api_key=cfg.llm.api_key, base_url=cfg.llm.base_url)
+        self._cache = AnalysisCacheService()
 
     def _calc_rsi(self, prices: pd.Series, period: int = 14) -> float | None:
         """Calculate RSI."""
@@ -256,6 +258,12 @@ class IndexService:
 
     def generate_analysis(self, prefix: str) -> dict[str, Any]:
         """Generate AI analysis for a single index, with raw 60-day K-line data."""
+        cache_key = f"index:{prefix}"
+        cached = self._cache.get(cache_key)
+        if cached:
+            chn_name = dict(SUPPORTED_INDICES).get(prefix.upper().replace("^", ""), (None, None, prefix))[2]
+            return {"ok": True, "prefix": prefix, "name": chn_name, "report": cached["report"], "data": cached["data"], "cached": True}
+
         mapping = self.PREFIX_MAP.get(prefix)
         if not mapping:
             return {"ok": False, "error": f"Unknown index prefix: {prefix}"}
@@ -385,3 +393,7 @@ class IndexService:
                 "error": str(e),
                 "data": context,
             }
+        finally:
+            # Cache the successful result
+            if "text" in dir() and text:
+                self._cache.set(cache_key, text, context)

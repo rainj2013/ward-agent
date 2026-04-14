@@ -13,6 +13,7 @@ import yfinance as yf
 from anthropic import Anthropic
 
 from ward.core.config import get_config
+from ward.services.db.analysis_cache_service import AnalysisCacheService
 
 
 # Extended stock list for search
@@ -135,6 +136,7 @@ class StockService:
     def __init__(self):
         cfg = get_config()
         self._client = Anthropic(api_key=cfg.llm.api_key, base_url=cfg.llm.base_url)
+        self._cache = AnalysisCacheService()
 
     def _fetch_news(self, symbol: str, limit: int = 10) -> list[dict]:
         """Fetch stock news via akshare eastmoney (中文财经新闻)."""
@@ -220,6 +222,11 @@ class StockService:
         """Generate AI-powered stock analysis report."""
         symbol = symbol.upper()
         name = POPULAR_STOCKS.get(symbol, symbol)
+
+        cache_key = f"stock:{symbol}"
+        cached = self._cache.get(cache_key)
+        if cached:
+            return {"ok": True, "symbol": symbol, "name": name, "report": cached["report"], "data": cached["data"], "cached": True}
 
         # Gather all available data
         quote = self.get_quote(symbol)
@@ -395,6 +402,9 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
                 "error": str(e),
                 "data": context,
             }
+        finally:
+            if "report" in dir() and report:
+                self._cache.set(cache_key, report, context)
 
     def search(self, query: str) -> dict[str, Any]:
         """Search stocks by symbol or name."""

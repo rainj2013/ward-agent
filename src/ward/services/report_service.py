@@ -11,6 +11,7 @@ import yfinance as yf
 from anthropic import Anthropic
 
 from ward.core.config import get_config
+from ward.services.db.analysis_cache_service import AnalysisCacheService
 from ward.services.nasdaq_service import MarketService
 
 
@@ -73,6 +74,7 @@ class ReportService:
         self.config = get_config()
         self.ns = MarketService()
         self._client: Anthropic | None = None
+        self._cache = AnalysisCacheService()
 
     @property
     def client(self) -> Anthropic:
@@ -149,6 +151,11 @@ class ReportService:
 
     def generate_market_report(self) -> dict[str, Any]:
         """Generate today's Nasdaq market report with news + sentiment."""
+        cache_key = "market:report"
+        cached = self._cache.get(cache_key)
+        if cached:
+            return {"ok": True, "report": cached["report"], "data": cached["data"], "cached": True}
+
         # 1. Market data
         overview = self.ns.get_market_overview()
 
@@ -209,3 +216,6 @@ class ReportService:
                 "error": str(e),
                 "data": context,
             }
+        finally:
+            if "text" in dir() and text:
+                self._cache.set(cache_key, text, context)
