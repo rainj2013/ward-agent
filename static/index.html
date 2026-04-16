@@ -120,6 +120,7 @@
           </div>
         </div>
         <div class="card-footer" style="display:none">
+          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('gold','黄金',this)">🧠 AI分析</button>
           <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('gold','黄金')">📊 K线图</button>
         </div>
         <div id="index-chart-gold" class="index-chart-container" style="display:none"></div>
@@ -139,6 +140,7 @@
     <section id="analysis-ixic" class="stock-analysis-section" style="display:none"></section>
     <section id="analysis-dji" class="stock-analysis-section" style="display:none"></section>
     <section id="analysis-spx" class="stock-analysis-section" style="display:none"></section>
+    <section id="analysis-gold" class="stock-analysis-section" style="display:none"></section>
 
     <!-- Extended Hours Bar -->
     <section class="extended-section" id="extended-section" style="display:none">

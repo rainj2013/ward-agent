@@ -21,6 +21,7 @@ SUPPORTED_INDICES = {
     "^IXIC": ("Nasdaq Composite", "纳斯达克综合指数", "美国科技股和成长股风向标"),
     "^NDX": ("Nasdaq 100", "纳斯达克100指数", "美国科技龙头股指数"),
     "^DJI": ("Dow Jones", "道琼斯工业指数", "美国传统蓝筹股指数"),
+    "GC=F": ("Gold", "黄金期货", "全球避险资产和通胀对冲工具"),
 }
 
 
@@ -249,21 +250,122 @@ class IndexService:
         except Exception as e:
             return {"price": None, "error": str(e)}
 
+    def _get_dxy(self) -> dict[str, Any]:
+        """Get US Dollar Index (DXY) data."""
+        try:
+            ticker = yf.Ticker("^DXY")
+            hist = ticker.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                return {"price": None, "error": "no data"}
+            price = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2])
+            change = round(price - prev, 2)
+            change_pct = round((change / prev) * 100, 2) if prev else 0
+            return {"price": round(price, 2), "change": change, "change_pct": change_pct}
+        except Exception as e:
+            return {"price": None, "error": str(e)}
+
+    def _get_gld_etf(self) -> dict[str, Any]:
+        """Get SPDR Gold Shares ETF (GLD) data."""
+        try:
+            ticker = yf.Ticker("GLD")
+            hist = ticker.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                return {"price": None, "error": "no data"}
+            price = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2])
+            change = round(price - prev, 2)
+            change_pct = round((change / prev) * 100, 2) if prev else 0
+            return {"price": round(price, 2), "change": change, "change_pct": change_pct}
+        except Exception as e:
+            return {"price": None, "error": str(e)}
+
+    def _get_sp500_quote(self) -> dict[str, Any]:
+        """Get S&P 500 quote for GP ratio calculation."""
+        try:
+            ticker = yf.Ticker("^GSPC")
+            hist = ticker.history(period="5d")
+            if hist.empty:
+                return {"price": None}
+            return {"price": round(float(hist["Close"].iloc[-1]), 2)}
+        except Exception:
+            return {"price": None}
+
     # Map prefix -> (yfinance_symbol, display_name, chn_name)
     PREFIX_MAP = {
         "ixic": ("^IXIC", "Nasdaq Composite", "纳斯达克综合指数"),
         "spx":  ("^GSPC", "S&P 500",           "标普500指数"),
         "dji":  ("^DJI", "Dow Jones",          "道琼斯工业指数"),
+        "gold": ("GC=F", "Gold",               "黄金期货"),
     }
 
+    GOLD_SYSTEM_PROMPT = """你是一个专业的贵金属分析师，擅长分析黄金、白银等贵金属的价格走势和驱动因素。
+根据提供的黄金期货数据、技术指标和宏观经济背景，生成专业的黄金市场分析报告。
+
+**输出格式要求（严格按此结构输出，每节必须有实质内容）：**
+
+## 一、黄金今日行情
+| 项目 | 数值 |
+|------|------|
+| 收盘价 | $X,XXX |
+| 涨跌幅 | ±X.XX% |
+| 日内高点 | $X,XXX |
+| 日内低点 | $X,XXX |
+| 成交量 | XXX,XXX 手 |
+
+[用2-3句话总结今日黄金走势]
+
+## 二、宏观经济背景
+- **美元指数 (DXY)**：影响黄金的的核心因素，美元强弱与黄金反向
+- **实际利率**：实际利率 = 名义利率 - 通胀预期，实际利率走低对黄金利好
+- **地缘政治风险**：当前主要风险事件（如有）
+- **央行购金动态**：各国央行黄金储备变化趋势
+
+## 三、技术面分析
+- **当前价格**：$X,XXX（相比 MA20: 突破/跌破/粘合）
+- **均线系统**：MA5 / MA20 / MA60（多头排列 / 空头排列 / 震荡）
+- **趋势判断**：短期 / 中期趋势
+- **关键支撑位**：$X,XXX
+- **关键阻力位**：$X,XXX
+- **RSI（14）**：XX（超买>70 / 超卖<30 / 中性）
+- **MACD**：金叉 / 死叉 / 盘整（能量柱方向）
+- **布林带**：价格位置（上轨/中轨/下轨）
+
+## 四、黄金专属指标
+- **黄金与标普500比值（GP）**：判断股金跷跷板效应
+- **黄金仓位变化**：投机多头 vs 套保空头持仓变化
+- **黄金ETF持仓（SPDR GLD）**：全球最大黄金ETF持仓量变化
+
+## 五、综合判断与操作建议
+- **当前市场状态**：强势上涨 / 震荡整理 / 弱势下跌
+- **核心驱动因素**：当前黄金最主要的1-2个驱动逻辑
+- **操作建议**：逢低买入 / 逢高减仓 / 区间操作 / 观望
+- **风险提示**：当前主要风险
+
+---
+注意：所有数据必须来自提供的市场数据，不要编造数字。报告用中文撰写，突出重点，不要废话。"""
+
     def generate_analysis(self, prefix: str) -> dict[str, Any]:
-        """Generate AI analysis for a single index, with raw 60-day K-line data."""
+        """Generate AI analysis for a single index (or gold), with raw 60-day K-line data."""
         cache_key = f"index:{prefix}"
         cached = self._cache.get(cache_key)
         if cached:
-            chn_name = dict(SUPPORTED_INDICES).get(prefix.upper().replace("^", ""), (None, None, prefix))[2]
+            # Look up by PREFIX_MAP first (has all prefixes), then by yfinance symbol
+            mapping = self.PREFIX_MAP.get(prefix)
+            if mapping:
+                chn_name = mapping[2]
+            else:
+                chn_name = next(
+                    (v[2] for k, v in SUPPORTED_INDICES.items() if prefix.upper().replace("^", "").replace("=", "") == k.upper().replace("^", "").replace("=", "")),
+                    prefix
+                )
             return {"ok": True, "prefix": prefix, "name": chn_name, "report": cached["report"], "data": cached["data"], "cached": True}
 
+        # ── Gold branch ────────────────────────────────────────────────
+        if prefix == "gold":
+            return self._generate_gold_analysis(cache_key)
+
+        # ── Regular index branch ────────────────────────────────────────
         mapping = self.PREFIX_MAP.get(prefix)
         if not mapping:
             return {"ok": False, "error": f"Unknown index prefix: {prefix}"}
@@ -369,6 +471,7 @@ class IndexService:
 请生成专业分析报告，包含：今日行情总结、技术面深度分析、当前市场状态判断、操作建议。
 所有数据必须来自上面提供的数据，不要编造。报告用中文，突出重点。"""
 
+        text = ""
         try:
             response = self._client.messages.create(
                 model=get_config().llm.model,
@@ -394,6 +497,155 @@ class IndexService:
                 "data": context,
             }
         finally:
-            # Cache the successful result
-            if "text" in dir() and text:
+            if text:
+                self._cache.set(cache_key, text, context)
+
+    # ── Gold-specific analysis ────────────────────────────────────────────────
+
+    def _generate_gold_analysis(self, cache_key: str) -> dict[str, Any]:
+        """Generate AI analysis for gold futures."""
+        yf_sym = "GC=F"
+        chn_name = "黄金期货"
+
+        # 1. Gold quote
+        quote = self._get_quote(yf_sym)
+        time.sleep(0.1)
+
+        # 2. 60-day K-line
+        df = self._get_historical(yf_sym, 60)
+        klines = []
+        if df is not None and not df.empty:
+            for dt, row in df.iterrows():
+                klines.append({
+                    "date":   dt.strftime("%Y-%m-%d"),
+                    "open":   round(float(row["Open"]), 2),
+                    "high":   round(float(row["High"]), 2),
+                    "low":    round(float(row["Low"]), 2),
+                    "close":  round(float(row["Close"]), 2),
+                    "volume": int(row["Volume"]),
+                })
+
+        # 3. Technical indicators
+        tech = self._get_tech_indicators(df) if df is not None else {}
+
+        # 4. DXY (dollar index)
+        dxy = self._get_dxy()
+        time.sleep(0.1)
+
+        # 5. GLD ETF
+        gld = self._get_gld_etf()
+        time.sleep(0.1)
+
+        # 6. S&P 500 for GP ratio
+        spx = self._get_sp500_quote()
+
+        # 7. VIX
+        vix = self._get_vix()
+
+        context = {
+            "prefix": "gold",
+            "yf_symbol": yf_sym,
+            "name": chn_name,
+            "quote": quote,
+            "klines": klines,
+            "tech": tech,
+            "dxy": dxy,
+            "gld_etf": gld,
+            "sp500": spx,
+            "vix": vix,
+        }
+
+        # Calculate Gold/S&P 500 ratio
+        gold_price = quote.get("price")
+        spx_price = spx.get("price")
+        if gold_price and spx_price:
+            gp_ratio = round(gold_price / spx_price, 4)
+        else:
+            gp_ratio = None
+
+        # Format K-line table
+        if klines:
+            kline_table = "\n".join(
+                f"| {k['date']} | {k['open']:.2f} | {k['high']:.2f} | "
+                f"{k['low']:.2f} | {k['close']:.2f} | {k['volume']:,} |"
+                for k in klines
+            )
+            kline_md = f"| 日期 | 开盘 | 最高 | 最低 | 收盘 | 成交量 |\n|-----------|------|------|------|------|----------|\n{kline_table}"
+        else:
+            kline_md = "无数据"
+
+        macd = tech.get("macd", {})
+        bb   = tech.get("bollinger", {})
+        macd_cross = {1: "金叉", -1: "死叉", 0: "中性"}.get(macd.get("cross", 0), "无数据")
+        tech_md = (
+            f"- **当前价格**: ${tech.get('current', '无数据')}\n"
+            f"- **均线**: MA5={tech.get('ma5')}, MA20={tech.get('ma20')}, MA60={tech.get('ma60')}\n"
+            f"- **趋势**: {tech.get('trend', '无数据')}\n"
+            f"- **RSI(14)**: {tech.get('rsi', '无数据')}\n"
+            f"- **MACD**: {macd_cross} (MACD={macd.get('macd')}, Signal={macd.get('signal')})\n"
+            f"- **布林带**: 上轨=${bb.get('upper')}, 中轨=${bb.get('middle')}, 下轨=${bb.get('lower')}, 位置={bb.get('position')}"
+        )
+
+        # Key support/resistance from bollinger + recent extremes
+        if df is not None and not df.empty:
+            recent_low = round(float(df["Low"].tail(20).min()), 2)
+            recent_high = round(float(df["High"].tail(20).max()), 2)
+        else:
+            recent_low = recent_high = None
+
+        user_prompt = f"""分析以下黄金期货数据，生成专业的贵金属市场分析报告。
+
+=== 黄金今日行情 ===
+- 现货价（GC=F）: ${quote.get('price', '无数据')}
+- 涨跌幅: {quote.get('change_pct', '?')}%
+- 今日开盘: ${quote.get('open', '?')} | 最高: ${quote.get('high', '?')} | 最低: ${quote.get('low', '?')}
+- 成交量: {quote.get('volume', '无数据'):,} 手
+
+=== 关联市场数据 ===
+- **美元指数 (DXY)**: {dxy.get('price', '无数据')}（涨跌: {dxy.get('change_pct', '无数据')}%）
+- **SPDR黄金ETF (GLD)**: ${gld.get('price', '无数据')}（涨跌: {gld.get('change_pct', '无数据')}%）
+- **标普500**: {spx.get('price', '无数据')}
+- **黄金/标普500比值**: {gp_ratio if gp_ratio else '无数据'}
+- **VIX恐慌指数**: {vix.get('price', '无数据')}
+
+=== 黄金过去60个交易日K线 ===
+{kline_md}
+
+=== 黄金技术指标 ===
+{tech_md}
+
+=== 关键价位参考 ===
+- 近期支撑: ${recent_low if recent_low else '无数据'}
+- 近期阻力: ${recent_high if recent_high else '无数据'}
+
+请生成专业黄金分析报告，包含：今日行情总结、宏观背景（美元/利率/通胀）、技术面深度分析、关键价位、操作建议。
+所有数据必须来自上面提供的数据，不要编造。报告用中文，突出重点。"""
+
+        text = ""
+        try:
+            response = self._client.messages.create(
+                model=get_config().llm.model,
+                max_tokens=6000,
+                system=self.GOLD_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            text = "\n".join(
+                block.text if hasattr(block, "text") else ""
+                for block in response.content
+            )
+            return {
+                "ok": True,
+                "prefix": "gold",
+                "name": chn_name,
+                "report": text,
+                "data": context,
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": str(e),
+                "data": context,
+            }
+        finally:
+            if text:
                 self._cache.set(cache_key, text, context)
