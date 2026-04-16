@@ -71,12 +71,20 @@ class MarketService:
             },
         }
 
+    def get_gold_quote(self) -> dict[str, Any]:
+        """Get Gold quote."""
+        data = self.fetcher.get_gold_quote()
+        if "error" in data:
+            return {"ok": False, "error": data["error"]}
+        return {"ok": True, "data": data}
+
     def get_market_overview(self) -> dict[str, Any]:
         """Get combined market overview for all three US indices."""
         ixic = self.fetcher.get_nasdaq_quote()
         ndx = self.fetcher.get_nasdaq_100_quote()
         dji = self.fetcher.get_dji_quote()
         spx = self.fetcher.get_spx_quote()
+        gold = self.fetcher.get_gold_quote()
 
         return {
             "ok": True,
@@ -84,4 +92,5 @@ class MarketService:
             "nasdaq_100": ndx if "error" not in ndx else None,
             "dow_jones": dji if "error" not in dji else None,
             "sp500": spx if "error" not in spx else None,
+            "gold": gold if "error" not in gold else None,
         }

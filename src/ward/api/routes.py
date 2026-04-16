@@ -89,6 +89,17 @@ async def get_spx_quote():
     )
 
 
+@router.get("/api/gold-quote", response_model=QuoteResponse)
+async def get_gold_quote():
+    """Get Gold quote."""
+    result = ms.get_gold_quote()
+    return QuoteResponse(
+        ok=result.get("ok", False),
+        data=result.get("data"),
+        error=result.get("error"),
+    )
+
+
 @router.get("/api/market-overview", response_model=MarketOverviewResponse)
 async def get_market_overview():
     """Get combined market overview."""
@@ -99,6 +110,7 @@ async def get_market_overview():
         nasdaq_100=result.get("nasdaq_100"),
         dow_jones=result.get("dow_jones"),
         sp500=result.get("sp500"),
+        gold=result.get("gold"),
     )
 
 

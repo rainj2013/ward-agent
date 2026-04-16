@@ -79,6 +79,7 @@ class MarketOverviewResponse(BaseModel):
     nasdaq_100: dict | None = None
     dow_jones: dict | None = None
     sp500: dict | None = None
+    gold: dict | None = None
 
 
 class ReportResponse(BaseModel):

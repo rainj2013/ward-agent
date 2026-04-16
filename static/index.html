@@ -99,6 +99,31 @@
         </div>
         <div id="index-chart-spx" class="index-chart-container" style="display:none"></div>
       </div>
+
+      <div class="card" id="card-gold">
+        <div class="card-header">
+          <span class="card-title">黄金</span>
+          <div class="card-header-right">
+            <span class="card-badge" style="display:none">收盘</span>
+            <span class="card-change" id="gold-header-change"></span>
+          </div>
+          <span class="loading">加载中...</span>
+        </div>
+        <div class="card-body" style="display:none">
+          <div class="price" id="gold-price">--</div>
+          <div class="change" id="gold-change">--</div>
+          <div class="meta">
+            <span>开盘 <em id="gold-open">--</em></span>
+            <span>最高 <em id="gold-high">--</em></span>
+            <span>最低 <em id="gold-low">--</em></span>
+            <span>成交量 <em id="gold-volume">--</em></span>
+          </div>
+        </div>
+        <div class="card-footer" style="display:none">
+          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('gold','黄金')">📊 K线图</button>
+        </div>
+        <div id="index-chart-gold" class="index-chart-container" style="display:none"></div>
+      </div>
     </section>
 
     <!-- Index Chart Overlay (full-width, hidden by default) -->

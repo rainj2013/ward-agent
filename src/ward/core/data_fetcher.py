@@ -192,3 +192,32 @@ class DataFetcher:
             return {"data": df.to_dict("records") if not df.empty else [], "error": None}
         except Exception as e:
             return {"data": [], "error": str(e)}
+
+    @staticmethod
+    def get_gold_quote() -> dict[str, Any]:
+        """Fetch gold futures quote (GC=F) via yfinance."""
+        try:
+            ticker = yf.Ticker("GC=F")
+            hist = ticker.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                return {"error": "No data from yfinance"}
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2]
+            close = float(latest["Close"])
+            prev_close = float(prev["Close"])
+            change = round(close - prev_close, 2)
+            change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
+            return {
+                "symbol": "GC=F",
+                "name": "Gold",
+                "date": str(latest.name.date()),
+                "close": close,
+                "open": float(latest["Open"]),
+                "high": float(latest["High"]),
+                "low": float(latest["Low"]),
+                "volume": float(latest["Volume"]),
+                "change": change,
+                "change_pct": change_pct,
+            }
+        except Exception as e:
+            return {"error": str(e)}

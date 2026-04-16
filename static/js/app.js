@@ -50,7 +50,7 @@ function fillCard(prefix, data) {
     hdrChange.className = 'card-change ' + (data.change_pct > 0 ? 'positive' : data.change_pct < 0 ? 'negative' : 'neutral');
   }
   // Cache for chat context
-  const indexNames = { ixic: 'Nasdaq 综合', dji: '道琼斯', spx: '标普500' };
+  const indexNames = { ixic: 'Nasdaq 综合', dji: '道琼斯', spx: '标普500', gold: '黄金' };
   _cardCache.indices[prefix] = {
     name: indexNames[prefix] || prefix,
     close: data.close,
@@ -195,6 +195,12 @@ async function loadMarketData() {
     if (data.sp500) {
       fillCard('spx', data.sp500);
       showCard('card-spx', isHistoricalData(data.sp500));
+    }
+
+    // Gold
+    if (data.gold) {
+      fillCard('gold', data.gold);
+      showCard('card-gold', isHistoricalData(data.gold));
     }
 
     updateMarketStatus();
@@ -1142,6 +1148,7 @@ const INDEX_SYMBOLS = {
   ixic: '^IXIC',
   dji: '^DJI',
   spx: '^GSPC',
+  gold: 'GC=F',
 };
 
 // Track which index chart is currently in overlay mode
