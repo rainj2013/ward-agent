@@ -142,6 +142,28 @@ ward
 
 ---
 
+## 与 AI Agent 集成
+
+Ward 提供 REST API，可以接入任何 AI Agent（Hermes、OpenClaw、Claude Code 等），在微信/飞书/Telegram 等平台通过对话调用 Ward 数据。
+
+### ward-skill
+
+[ward-skill](https://github.com/rainj2013/ward-skill) 是 Ward 的 Agent 技能包，让 AI Agent 知道如何调用 Ward API。
+
+支持平台：
+
+| Agent | 安装方式 |
+|--------|---------|
+| Hermes | `cp -r ward ~/.hermes/skills/ && hermes gateway run --replace` |
+| OpenClaw | `cp -r ward ~/.openclaw/skills/` |
+| Claude Code / 其他 | 直接读取 `SKILL.md` 获知 API 调用方式 |
+
+安装后，在微信/飞书等平台直接发消息问美股即可，Agent 自动调 Ward API 回复。
+
+详细说明见 [ward-skill](https://github.com/rainj2013/ward-skill)。
+
+---
+
 ## 技术架构
 
 ```
