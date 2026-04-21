@@ -27,6 +27,7 @@ class DatabaseConfig(BaseModel):
 class Config(BaseModel):
     llm: LLMConfig
     database: DatabaseConfig = DatabaseConfig()
+    public_mode: bool = False  # True = 绑定 0.0.0.0（允许外部访问），默认 False = 仅本地
     web_host: str = "0.0.0.0"
     web_port: int = 8000
 
@@ -38,11 +39,14 @@ def load_config() -> Config:
     model = os.environ.get("LLM_MODEL", "MiniMax-M2.7-highspeed")
 
     # Web server
-    web_host = os.environ.get("WEB_HOST", "0.0.0.0")
+    # PUBLIC_MODE=1 或 WARD_PUBLIC_MODE=1 时绑定 0.0.0.0（允许外部访问），默认只绑定 127.0.0.1
+    public_mode = os.environ.get("PUBLIC_MODE", "") == "1" or os.environ.get("WARD_PUBLIC_MODE", "") == "1"
+    web_host = os.environ.get("WEB_HOST", "0.0.0.0" if public_mode else "127.0.0.1")
     web_port = int(os.environ.get("WEB_PORT", "8000"))
 
     return Config(
         llm=LLMConfig(api_key=api_key, base_url=base_url, model=model),
+        public_mode=public_mode,
         web_host=web_host,
         web_port=web_port,
     )
