@@ -23,6 +23,7 @@ from ward.schemas.models import (
     StockQuoteResponse,
     StockSearchResponse,
 )
+from ward.agent.ward_agent import get_ward_agent
 from ward.services.chat_service import ChatService
 from ward.services.index_service import IndexService
 from ward.services.nasdaq_service import MarketService
@@ -32,7 +33,7 @@ from ward.services.stock_service import StockService
 router = APIRouter()
 ms = MarketService()
 rs = ReportService()
-cs = ChatService()
+cs = ChatService()  # kept only for history endpoints
 ss = StockService()
 is_ = IndexService()
 
@@ -140,56 +141,60 @@ async def generate_report():
     )
 
 
+# ── SSE helper ────────────────────────────────────────────────────────────────
+
+async def sse_format(chunk: dict, conversation_id: int) -> str:
+    """Format a chunk dict as an SSE data line."""
+    conv_id = chunk.get("conversation_id", conversation_id)
+    data = json.dumps({
+        "ok": True,
+        "conversation_id": conv_id,
+        "chunk": chunk.get("chunk", ""),
+        "thinking": chunk.get("thinking"),
+        "tool_call": chunk.get("tool_call"),
+        "tool_result": chunk.get("tool_result"),
+        "done": chunk.get("done", False),
+        "messages": chunk.get("messages"),
+    })
+    return f"data: {data}\n\n"
+
+
+# ── Chat endpoints ────────────────────────────────────────────────────────────
+
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    """Send a chat message and get AI response."""
-    result = cs.chat(req.conversation_id, req.message, req.context)
+    """Send a chat message and get AI response (non-streaming)."""
+    agent = get_ward_agent()
+    final_reply = ""
+    async for chunk in agent.chat_stream(req.conversation_id, req.message, req.context):
+        if chunk.get("chunk"):
+            final_reply = chunk.get("chunk", "")
+        if chunk.get("done"):
+            break
     return ChatResponse(
-        ok=result.get("ok", False),
-        conversation_id=result.get("conversation_id"),
-        reply=result.get("reply"),
-        messages=[MessageResponse(**m) for m in result.get("messages", [])],
-        error=result.get("error"),
+        ok=True,
+        conversation_id=req.conversation_id,
+        reply=final_reply,
+        messages=[],
+        error=None,
     )
-
-
-async def chat_event_generator(result, conversation_id):
-    import asyncio
-    loop = asyncio.get_running_loop()
-    iterator = iter(result)
-    while True:
-        try:
-            chunk = await loop.run_in_executor(None, next, iterator)
-        except StopIteration:
-            break
-        conv_id = chunk.get("conversation_id", conversation_id)
-        if chunk.get("ok"):
-            data = json.dumps({
-                "ok": True,
-                "conversation_id": conv_id,
-                "chunk": chunk.get("chunk", ""),
-                "thinking": chunk.get("thinking"),
-                "tool_call": chunk.get("tool_call"),
-                "tool_result": chunk.get("tool_result"),
-                "done": chunk.get("done", False),
-                "messages": chunk.get("messages"),
-            })
-            yield f"data: {data}\n\n"
-            if chunk.get("done"):
-                break
-        else:
-            data = json.dumps({"ok": False, "conversation_id": conv_id, "error": chunk.get("error", "Unknown error"), "done": True})
-            yield f"data: {data}\n\n"
-            break
 
 
 @router.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
     """Send a chat message and stream AI response chunks via SSE."""
-    conversation_id = req.conversation_id
-    result = cs.chat_stream(conversation_id, req.message, req.context)
+    agent = get_ward_agent()
+    async def event_generator():
+        async for chunk in agent.chat_stream(req.conversation_id, req.message, req.context):
+            if not chunk.get("ok"):
+                yield f"data: {json.dumps({'ok': False, 'error': chunk.get('error', 'Unknown error'), 'done': True})}\n\n"
+                break
+            yield await sse_format(chunk, req.conversation_id)
+            if chunk.get("done"):
+                break
+
     return StreamingResponse(
-        chat_event_generator(result, conversation_id),
+        event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",
