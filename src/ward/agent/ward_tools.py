@@ -61,7 +61,7 @@ class GetStockQuoteTool(Tool):
 
 
 class GetStockKlineTool(Tool):
-    """获取美股个股的历史K线数据（60日日K线，OHLCV格式）。"""
+    """获取美股个股的历史K线数据（60日日K线，OHLCV格式）。注意：此工具仅适用于个股，不适用于指数。"""
 
     @property
     def name(self) -> str:
@@ -69,14 +69,14 @@ class GetStockKlineTool(Tool):
 
     @property
     def description(self) -> str:
-        return "获取美股个股的历史K线数据（60日日K线，OHLCV格式）。当用户问起某只股票的历史走势、近期趋势时调用。"
+        return "获取美股个股的历史K线数据（60日日K线，OHLCV格式）。当用户问起某只股票的历史走势、近期趋势时调用。此工具仅适用于个股（如AAPL、TSLA），不适用于指数。"
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "股票代码，如 AAPL、TSLA"},
+                "symbol": {"type": "string", "description": "股票代码（仅限美股个股），如 AAPL、TSLA、MSFT、NVDA"},
                 "days": {
                     "type": "integer",
                     "description": "天数，默认60",
@@ -154,7 +154,7 @@ class GetIndexAnalyzeTool(Tool):
 
     @property
     def description(self) -> str:
-        return "获取AI驱动的指数分析报告。当用户问起标普500、纳斯达克综合、道琼斯某指数的AI分析时调用。"
+        return "获取AI驱动的指数分析报告，包含技术面、基本面情绪综合分析。当用户问某指数（标普500、纳斯达克、道琼斯）的AI分析或投资建议时调用。"
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -191,6 +191,58 @@ class GetIndexAnalyzeTool(Tool):
                 ),
             )
         return ToolResult(success=False, content="", error=result.get("error", "分析失败"))
+
+
+class GetIndexKlineTool(Tool):
+    """获取美股指数的历史K线数据（60日日K线，OHLCV格式）。注意：此工具仅适用于指数，不适用于个股。"""
+
+    @property
+    def name(self) -> str:
+        return "get_index_kline"
+
+    @property
+    def description(self) -> str:
+        return "获取美股指数的历史K线数据（60日日K线，OHLCV格式）。当用户问起某个指数（标普500、纳斯达克、道琼斯）的近期走势或K线数据时调用。此工具仅适用于指数（spx/ixic/dji），不适用于个股。"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "prefix": {
+                    "type": "string",
+                    "description": "指数前缀：spx（标普500）、ixic（纳斯达克综合）、dji（道琼斯）",
+                    "enum": ["spx", "ixic", "dji"],
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "天数，默认60",
+                    "default": 60,
+                },
+            },
+            "required": ["prefix"],
+        }
+
+    async def execute(self, prefix: str = "", days: int = 60, **kwargs) -> ToolResult:
+        from ward.services.index_service import IndexService
+
+        is_ = IndexService()
+        result = is_.get_kline(prefix, days)
+        if result.get("ok"):
+            return ToolResult(
+                success=True,
+                content=json.dumps(
+                    {
+                        "ok": True,
+                        "prefix": prefix,
+                        "name": result.get("name", prefix),
+                        "bars": result.get("data", []),
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
+        return ToolResult(success=False, content="", error=result.get("error", "获取K线失败"))
 
 
 class GetMarketOverviewTool(Tool):
@@ -271,6 +323,7 @@ def get_all_tools() -> list[Tool]:
         GetStockKlineTool(),
         GetStockAnalyzeTool(),
         GetIndexAnalyzeTool(),
+        GetIndexKlineTool(),
         GetMarketOverviewTool(),
         GetExtendedHoursTool(),
     ]

@@ -190,6 +190,27 @@ class IndexService:
         except Exception:
             return None
 
+    def get_kline(self, prefix: str, days: int = 60) -> dict[str, Any]:
+        """Get index kline data by prefix (spx/ixic/dji)."""
+        mapping = self.PREFIX_MAP.get(prefix)
+        if not mapping:
+            return {"ok": False, "error": f"Unknown index prefix: {prefix}"}
+        yf_sym, _, chn_name = mapping
+        df = self._get_historical(yf_sym, days)
+        if df is None or df.empty:
+            return {"ok": False, "error": f"Could not fetch kline data for {prefix}"}
+        bars = []
+        for dt, row in df.iterrows():
+            bars.append({
+                "date": dt.strftime("%Y-%m-%d"),
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(row["Volume"]),
+            })
+        return {"ok": True, "prefix": prefix, "name": chn_name, "data": bars}
+
     def _get_tech_indicators(self, df: pd.DataFrame) -> dict[str, Any]:
         """Calculate all technical indicators from price DataFrame."""
         close = df["Close"]
