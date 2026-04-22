@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator
 
 from ward.mini_agent.llm import LLMClient
 from ward.mini_agent.llm.llm_wrapper import LLMClient as MiniLLMClient
-from ward.mini_agent.schema import LLMProvider
+from ward.mini_agent.schema import LLMProvider, Message
 from ward.mini_agent.agent import Agent as MiniAgent
 
 from ward.agent.ward_tools import get_all_tools
@@ -28,6 +28,7 @@ WARD_SYSTEM_PROMPT = """你是一个专业的美国股市分析助手，专注�
 重要规则：
 - 个股用 stock 工具（symbol 如 AAPL、TSLA），指数用 index 工具（prefix 如 spx、ixic、dji）
 - get_stock_kline 不能用于指数，get_index_kline 不能用于个股
+- 优先使用上述[页面已有数据]中的数据直接回答，只有当上下文数据不足时才调用工具查询
 - 用中文回答用户问题
 - 不要编造任何数据，所有数据必须来自工具返回结果
 - 如果工具返回的数据不足（如某字段为null），如实说明，不要填充
@@ -68,17 +69,91 @@ class WardMiniAgent:
             token_limit=80000,
         )
 
+    def _build_context_text(self, ctx: Any) -> str:
+        """Format ChatContext into a readable text block for the system prompt."""
+        if ctx is None:
+            return ""
+
+        parts = ["[页面已有数据]"]
+
+        # Index klines
+        if hasattr(ctx, "index_klines") and ctx.index_klines:
+            for prefix, bars in ctx.index_klines.items():
+                if not bars:
+                    continue
+                # latest bar
+                bar = bars[-1]
+                parts.append(
+                    f"- {prefix.upper()}指数K线: 最新日期={bar.get('date','?')}, "
+                    f"收盘={bar.get('close','?')}, 涨跌={bar.get('change','?')}({bar.get('changePercent','?')})"
+                )
+
+        # Stock klines
+        if hasattr(ctx, "stock_klines") and ctx.stock_klines:
+            for symbol, bars in ctx.stock_klines.items():
+                if not bars:
+                    continue
+                bar = bars[-1]
+                parts.append(
+                    f"- {symbol.upper()}K线: 最新日期={bar.get('date','?')}, "
+                    f"收盘={bar.get('close','?')}, 涨跌={bar.get('change','?')}({bar.get('changePercent','?')})"
+                )
+
+        # Stock quotes (个股实时行情)
+        if hasattr(ctx, "stocks") and ctx.stocks:
+            for stock in ctx.stocks:
+                parts.append(
+                    f"- {stock.name}({stock.symbol})行情: "
+                    f"现价={stock.close}, 涨跌={stock.change}({stock.change_pct}%), "
+                    f"开盘={stock.open}, 最高={stock.high}, 最低={stock.low}, 成交量={stock.volume}"
+                )
+
+        # Index analyses
+        if hasattr(ctx, "index_analyses") and ctx.index_analyses:
+            for prefix, report in ctx.index_analyses.items():
+                snippet = report[:100].replace("\n", " ") if report else "无"
+                parts.append(f"- {prefix.upper()}指数AI分析: {snippet}...")
+
+        # Stock analyses
+        if hasattr(ctx, "stock_analyses") and ctx.stock_analyses:
+            for symbol, report in ctx.stock_analyses.items():
+                snippet = report[:100].replace("\n", " ") if report else "无"
+                parts.append(f"- {symbol.upper()}AI分析: {snippet}...")
+
+        # Extended hours
+        if hasattr(ctx, "extended_hours") and ctx.extended_hours:
+            for prefix, eh in ctx.extended_hours.items():
+                parts.append(
+                    f"- {prefix.upper()}盘后/盘前: 现价={getattr(eh,'price',None)}, "
+                    f"涨跌={getattr(eh,'change',None)}({getattr(eh,'changePercent',None)})"
+                )
+
+        return "\n".join(parts) if len(parts) > 1 else ""
+
+    def _inject_context(self, context: Any | None):
+        """Re-inject page context into the system prompt (called every request)."""
+        ctx_text = self._build_context_text(context)
+        if not ctx_text:
+            return
+
+        marker = "[页面已有数据]"
+        sys_msg = self._agent.messages[0]
+        # Strip old block if present
+        if marker in sys_msg.content:
+            sys_msg.content = sys_msg.content[: sys_msg.content.index(marker)]
+        # Append fresh context
+        sys_msg.content = sys_msg.content.rstrip() + "\n\n" + ctx_text
+
     def reset_conversation(self):
         """Reset the agent's message history for a fresh conversation."""
-        # Keep system prompt (first message), clear everything else
-        system_msg = self._agent.messages[0]
-        self._agent.messages = [system_msg]
+        self._agent.messages = [Message(role="system", content=WARD_SYSTEM_PROMPT)]
 
     async def chat_stream(
         self,
         conversation_id: int,
         message: str,
         context: Any | None,
+        cancel_event: Any | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream agent response chunks via SSE-compatible dicts.
@@ -96,12 +171,15 @@ class WardMiniAgent:
         if conversation_id == 0:
             self.reset_conversation()
 
+        # Inject page context into system prompt so the model knows what's already loaded
+        self._inject_context(context)
+
         # Add user message
         self._agent.add_user_message(message)
 
         # Delegate entirely to framework's run_streaming()
         final_text = ""
-        async for event in self._agent.run_streaming():
+        async for event in self._agent.run_streaming(cancel_event=cancel_event):
             if event.type == "final":
                 final_text = event.final_text or ""
             elif event.type == "content":

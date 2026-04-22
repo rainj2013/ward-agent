@@ -356,8 +356,9 @@ let conversationId = localStorage.getItem('ward_conversation_id') ? parseInt(loc
 let _hasMoreMessages = false;
 let _nextBeforeId = null;
 let _historyLoaded = false;
-let _lastToolInvoke = null;   // 当前活跃的工具调用 DOM 节点
-let _lastThinking = null;     // 当前思考指示器 DOM 节点
+let _toolInvokeMap = new Map(); // tool_call_id -> div，正在查询的工具调用
+let _lastThinking = null;       // 当前思考指示器 DOM 节点
+let _sseBuffer = '';            // SSE 事件跨 TCP 分包的拼接缓冲
 
 async function initChat() {
   if (!conversationId) {
@@ -462,8 +463,19 @@ async function sendChat() {
   if (!message) return;
 
   input.value = '';
-  btn.disabled = true;
-  btn.textContent = '思考中...';
+  const isCancelling = btn.dataset.thinking === '1';
+  if (isCancelling) {
+    btn.dataset.thinking = '0';
+    abortCtrl.abort();
+    fetch(`/api/chat/${convId || conversationId}/cancel`, { method: 'POST' }).catch(() => {});
+    return;
+  }
+  btn.dataset.thinking = '1';
+  btn.textContent = '取消';
+
+  // AbortController for cancelling the in-flight request
+  const abortCtrl = new AbortController();
+  const abortSignal = abortCtrl.signal;
 
   const container = document.getElementById('chat-messages');
   const hint = container.querySelector('.hint');
@@ -513,6 +525,7 @@ async function sendChat() {
     for (const [sym, d] of Object.entries(_cardCache.stocks)) {
       if (d && d.close != null) {
         ctx.stocks.push({
+          symbol: sym,
           name: d.name,
           close: parseFloat(d.close),
           change: parseFloat(d.change),
@@ -556,6 +569,7 @@ async function sendChat() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: abortSignal,
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -578,84 +592,117 @@ async function sendChat() {
       if (!value) continue;
       console.log(`[stream] recv ${value.byteLength}B at +${Date.now()-reqStart}ms, done=${done}`);
 
-      const text = decoder.decode(value, { stream: !done });
-      const lines = text.split('\n');
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
+      // Reusable buffer to reassemble SSE events split across TCP packets
+      _sseBuffer = (_sseBuffer || '') + decoder.decode(value, { stream: !done });
+
+      // Split on double newline (SSE event boundary)
+      let parts = _sseBuffer.split('\n\n');
+      // Last part may be incomplete — keep it in buffer
+      _sseBuffer = parts.pop() || '';
+
+      for (const raw of parts) {
+        if (!raw.startsWith('data: ')) continue;
+        let data;
         try {
-          const data = JSON.parse(line.slice(6));
-          if (!data.ok) {
-            replyContent.textContent = `出错: ${data.error}`;
-            done = true;
-            break;
-          }
-          convId = data.conversation_id;
-          if (data.chunk) {
-            fullReply += data.chunk;
-            replyContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
-            container.scrollTop = container.scrollHeight;
-          }
-          if (data.done) {
-            replyContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
-            conversationId = convId;
-            localStorage.setItem('ward_conversation_id', convId);
-            // Streaming already put user + assistant messages into the DOM.
-            // done: only sync pagination state — never re-render.
-            if (data.has_more !== undefined) _hasMoreMessages = data.has_more;
-            if (data.next_before_id !== undefined) _nextBeforeId = data.next_before_id;
-            const loadMoreBtn = document.getElementById('chat-load-more-btn');
-            if (loadMoreBtn) loadMoreBtn.style.display = _hasMoreMessages ? 'block' : 'none';
-            _lastThinking = null;  // 重置，避免下一条消息的 thinking 追加到旧 div
-            done = true;
-          } else if (data.tool_call) {
-            // 模型发起工具调用 → 插入到 answerDiv 最前面（回答文本之前）
-            const toolDiv = document.createElement('div');
-            toolDiv.className = 'chat-tool-invoke';
-            toolDiv.textContent = '🔧 正在查询 ' + (data.tool_call.name || '...') + '...';
-            answerDiv.insertAdjacentElement('afterbegin', toolDiv);
-            container.scrollTop = container.scrollHeight;
-            _lastToolInvoke = toolDiv;
-          } else if (data.tool_result) {
-            // 工具执行完成 → 更新指示器
-            const toolDiv = _lastToolInvoke || document.createElement('div');
-            if (!_lastToolInvoke) {
-              toolDiv.className = 'chat-tool-invoke';
-              answerDiv.insertAdjacentElement('afterbegin', toolDiv);
-            }
-            const name = data.tool_result.name || '';
-            const ok = data.tool_result.result && data.tool_result.result.ok;
-            toolDiv.innerHTML = ok
-              ? '✅ ' + name + ' 查询成功'
-              : '❌ ' + name + ' 查询失败';
-            container.scrollTop = container.scrollHeight;
-            _lastToolInvoke = null;
-          } else if (data.thinking) {
-            // 模型思考中 → 累积追加到同一个 div，保持顺序
-            if (_lastThinking) {
-              _lastThinking.textContent += data.thinking;
-            } else {
-              const thinkDiv = document.createElement('div');
-              thinkDiv.className = 'chat-thinking';
-              thinkDiv.textContent = '🤔 ' + data.thinking;
-              answerDiv.insertAdjacentElement('afterbegin', thinkDiv);
-              container.scrollTop = container.scrollHeight;
-              _lastThinking = thinkDiv;
-            }
+          data = JSON.parse(raw.slice(6));
+        } catch(e) {
+          console.error('[WARD] JSON parse error:', e.message, 'raw:', raw.slice(0, 200));
+          continue;
+        }
+
+        // 先处理工具调用/结果，它们没有 ok 字段，不能用 !data.ok 判断
+        if (data.tool_call) {
+          const toolDiv = document.createElement('div');
+          toolDiv.className = 'chat-tool-invoke';
+          const toolName = data.tool_call.name || 'unknown';
+          const callId = data.tool_call.id || null;
+          toolDiv.textContent = '🔧 正在查询 ' + toolName + '...';
+          toolDiv.dataset.toolName = toolName;
+          toolDiv.dataset.callId = callId;
+          answerDiv.insertAdjacentElement('afterbegin', toolDiv);
+          container.scrollTop = container.scrollHeight;
+          _toolInvokeMap.set(callId, toolDiv);
+          continue;
+        }
+        if (data.tool_result) {
+          const resultId = data.tool_result.id || '';
+          const toolDiv = _toolInvokeMap.get(resultId);
+          if (!toolDiv) {
+            console.warn('[WARD] tool_result no match for id:', resultId);
           } else {
-            // Chunk received: scroll to keep newest message visible
+            const ok = data.tool_result.ok;
+            toolDiv.textContent = ok
+              ? '✅ ' + (data.tool_result.name || toolDiv.dataset.toolName) + ' 查询成功'
+              : '❌ ' + (data.tool_result.name || toolDiv.dataset.toolName) + ' 查询失败';
             container.scrollTop = container.scrollHeight;
           }
-        } catch (e) {}
+          continue;
+        }
+
+        // 通用对话事件
+        if (!data.ok) {
+          replyContent.textContent = `出错: ${data.error}`;
+          done = true;
+          break;
+        }
+        convId = data.conversation_id;
+        if (data.chunk) {
+          fullReply += data.chunk;
+          replyContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
+          container.scrollTop = container.scrollHeight;
+        }
+        if (data.done) {
+          if (data.cancelled) {
+            // Cancelled mid-stream — remove thinking indicator, show brief notice
+            if (_lastThinking) { _lastThinking.remove(); _lastThinking = null; }
+            _toolInvokeMap.clear(); // 清理工具调用指示器
+            const cancelNotice = document.createElement('div');
+            cancelNotice.className = 'chat-tool-invoke';
+            cancelNotice.textContent = '⚠️ 已取消';
+            answerDiv.insertAdjacentElement('afterbegin', cancelNotice);
+          } else {
+            replyContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
+          }
+          conversationId = convId;
+          localStorage.setItem('ward_conversation_id', convId);
+          // Streaming already put user + assistant messages into the DOM.
+          // done: only sync pagination state — never re-render.
+          if (data.has_more !== undefined) _hasMoreMessages = data.has_more;
+          if (data.next_before_id !== undefined) _nextBeforeId = data.next_before_id;
+          const loadMoreBtn = document.getElementById('chat-load-more-btn');
+          if (loadMoreBtn) loadMoreBtn.style.display = _hasMoreMessages ? 'block' : 'none';
+          _toolInvokeMap.clear(); // 重置工具调用 map
+          _lastThinking = null;  // 重置，避免下一条消息的 thinking 追加到旧 div
+          done = true;
+        } else if (data.thinking) {
+          // 模型思考中 → 累积追加到同一个 div，保持顺序
+          if (_lastThinking) {
+            _lastThinking.querySelector('.think-text').textContent += data.thinking;
+          } else {
+            const thinkDiv = document.createElement('div');
+            thinkDiv.className = 'chat-thinking';
+            thinkDiv.innerHTML = '<span class="think-label">🤔 思考中</span><span class="think-text"></span>';
+            answerDiv.insertAdjacentElement('afterbegin', thinkDiv);
+            container.scrollTop = container.scrollHeight;
+            _lastThinking = thinkDiv;
+          }
+        }
+        // else: unknown event type — ignore
       }
     }
   } catch (e) {
-    const errDiv = document.createElement('div');
-    errDiv.className = 'chat-msg assistant';
-    errDiv.textContent = `请求失败: ${e.message}`;
-    container.appendChild(errDiv);
-    container.scrollTop = container.scrollHeight;
+    if (e.name === 'AbortError') {
+      // User cancelled — no error message needed, just clean up
+    } else {
+      const errDiv = document.createElement('div');
+      errDiv.className = 'chat-msg assistant';
+      errDiv.textContent = `请求失败: ${e.message}`;
+      container.appendChild(errDiv);
+      container.scrollTop = container.scrollHeight;
+    }
   } finally {
-    btn.disabled = false;
+    _sseBuffer = '';
+    btn.dataset.thinking = '0';
     btn.textContent = '发送';
   }
 }

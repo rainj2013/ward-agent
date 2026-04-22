@@ -34,7 +34,7 @@ class Config(BaseModel):
 
 def load_config() -> Config:
     """Load config from environment variables (loaded from .env by python-dotenv)."""
-    api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("MINIMAX_PORTAL_API_KEY", "")
+    api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("MINIMAX_PORTAL_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
     model = os.environ.get("LLM_MODEL", "MiniMax-M2.7-highspeed")
 

@@ -40,6 +40,26 @@ is_ = IndexService()
 _static_dir = Path(__file__).parent.parent.parent.parent / "static"
 
 
+# ── Conversation cancellation registry ────────────────────────────────────────
+
+import asyncio
+from typing import Optional
+
+_conversation_cancels: dict[int, asyncio.Event] = {}
+
+
+def _get_or_create_cancel_event(conversation_id: int) -> asyncio.Event:
+    """Get existing cancel event or create new one for a conversation."""
+    if conversation_id not in _conversation_cancels:
+        _conversation_cancels[conversation_id] = asyncio.Event()
+    return _conversation_cancels[conversation_id]
+
+
+def _clear_cancel_event(conversation_id: int) -> None:
+    """Remove cancel event after conversation ends."""
+    _conversation_cancels.pop(conversation_id, None)
+
+
 @router.get("/", response_class=HTMLResponse)
 async def home():
     """Serve the main web page."""
@@ -184,14 +204,23 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     """Send a chat message and stream AI response chunks via SSE."""
     agent = get_ward_agent()
+    cancel_event = _get_or_create_cancel_event(req.conversation_id)
+
     async def event_generator():
-        async for chunk in agent.chat_stream(req.conversation_id, req.message, req.context):
-            if not chunk.get("ok"):
-                yield f"data: {json.dumps({'ok': False, 'error': chunk.get('error', 'Unknown error'), 'done': True})}\n\n"
-                break
-            yield await sse_format(chunk, req.conversation_id)
-            if chunk.get("done"):
-                break
+        try:
+            async for chunk in agent.chat_stream(req.conversation_id, req.message, req.context, cancel_event):
+                if not chunk.get("ok"):
+                    yield f"data: {json.dumps({'ok': False, 'error': chunk.get('error', 'Unknown error'), 'done': True})}\n\n"
+                    break
+                yield await sse_format(chunk, req.conversation_id)
+                if chunk.get("done"):
+                    break
+        except asyncio.CancelledError:
+            # Fetch was aborted by client (e.g. user clicked cancel) — signal done
+            yield f"data: {json.dumps({'ok': True, 'done': True, 'cancelled': True})}\n\n"
+            raise
+        finally:
+            _clear_cancel_event(req.conversation_id)
 
     return StreamingResponse(
         event_generator(),
@@ -202,6 +231,17 @@ async def chat_stream(req: ChatRequest):
             "Transfer-Encoding": "chunked",
         },
     )
+
+
+@router.post("/api/chat/{conversation_id}/cancel")
+async def cancel_chat(conversation_id: int):
+    """Cancel an ongoing chat conversation."""
+    # Also check id=0 for brand-new conversations (ID not yet assigned by server)
+    cancel_event = _conversation_cancels.get(conversation_id) or _conversation_cancels.get(0)
+    if cancel_event:
+        cancel_event.set()
+        return {"ok": True, "message": "Cancelled"}
+    return {"ok": False, "error": "No active conversation to cancel"}
 
 
 @router.get("/api/history/{conversation_id}", response_model=HistoryResponse)

@@ -22,6 +22,7 @@ class MarketDataItem(BaseModel):
 class StockDataItem(BaseModel):
     """Single stock today's snapshot."""
     name: str
+    symbol: str = ""   # e.g. AAPL
     close: float
     change: float
     change_pct: float
