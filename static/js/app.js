@@ -356,6 +356,8 @@ let conversationId = localStorage.getItem('ward_conversation_id') ? parseInt(loc
 let _hasMoreMessages = false;
 let _nextBeforeId = null;
 let _historyLoaded = false;
+let _lastToolInvoke = null;   // 当前活跃的工具调用 DOM 节点
+let _lastThinking = null;     // 当前思考指示器 DOM 节点
 
 async function initChat() {
   if (!conversationId) {
@@ -564,6 +566,10 @@ async function sendChat() {
 
     const assistantDiv = document.createElement('div');
     assistantDiv.className = 'chat-msg assistant';
+    const answerDiv = document.createElement('div');
+    const replyContent = document.createElement('div'); // 专门放回答文本，chunk只更新这个
+    answerDiv.appendChild(replyContent);
+    assistantDiv.appendChild(answerDiv);
     container.appendChild(assistantDiv);
 
     while (!done) {
@@ -579,18 +585,18 @@ async function sendChat() {
         try {
           const data = JSON.parse(line.slice(6));
           if (!data.ok) {
-            assistantDiv.textContent = `出错: ${data.error}`;
+            replyContent.textContent = `出错: ${data.error}`;
             done = true;
             break;
           }
           convId = data.conversation_id;
           if (data.chunk) {
             fullReply += data.chunk;
-            assistantDiv.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
+            replyContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
             container.scrollTop = container.scrollHeight;
           }
           if (data.done) {
-            assistantDiv.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
+            replyContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
             conversationId = convId;
             localStorage.setItem('ward_conversation_id', convId);
             // Streaming already put user + assistant messages into the DOM.
@@ -599,7 +605,42 @@ async function sendChat() {
             if (data.next_before_id !== undefined) _nextBeforeId = data.next_before_id;
             const loadMoreBtn = document.getElementById('chat-load-more-btn');
             if (loadMoreBtn) loadMoreBtn.style.display = _hasMoreMessages ? 'block' : 'none';
+            _lastThinking = null;  // 重置，避免下一条消息的 thinking 追加到旧 div
             done = true;
+          } else if (data.tool_call) {
+            // 模型发起工具调用 → 插入到 answerDiv 最前面（回答文本之前）
+            const toolDiv = document.createElement('div');
+            toolDiv.className = 'chat-tool-invoke';
+            toolDiv.textContent = '🔧 正在查询 ' + (data.tool_call.name || '...') + '...';
+            answerDiv.insertAdjacentElement('afterbegin', toolDiv);
+            container.scrollTop = container.scrollHeight;
+            _lastToolInvoke = toolDiv;
+          } else if (data.tool_result) {
+            // 工具执行完成 → 更新指示器
+            const toolDiv = _lastToolInvoke || document.createElement('div');
+            if (!_lastToolInvoke) {
+              toolDiv.className = 'chat-tool-invoke';
+              answerDiv.insertAdjacentElement('afterbegin', toolDiv);
+            }
+            const name = data.tool_result.name || '';
+            const ok = data.tool_result.result && data.tool_result.result.ok;
+            toolDiv.innerHTML = ok
+              ? '✅ ' + name + ' 查询成功'
+              : '❌ ' + name + ' 查询失败';
+            container.scrollTop = container.scrollHeight;
+            _lastToolInvoke = null;
+          } else if (data.thinking) {
+            // 模型思考中 → 累积追加到同一个 div，保持顺序
+            if (_lastThinking) {
+              _lastThinking.textContent += data.thinking;
+            } else {
+              const thinkDiv = document.createElement('div');
+              thinkDiv.className = 'chat-thinking';
+              thinkDiv.textContent = '🤔 ' + data.thinking;
+              answerDiv.insertAdjacentElement('afterbegin', thinkDiv);
+              container.scrollTop = container.scrollHeight;
+              _lastThinking = thinkDiv;
+            }
           } else {
             // Chunk received: scroll to keep newest message visible
             container.scrollTop = container.scrollHeight;

@@ -168,6 +168,9 @@ async def chat_event_generator(result, conversation_id):
                 "ok": True,
                 "conversation_id": conv_id,
                 "chunk": chunk.get("chunk", ""),
+                "thinking": chunk.get("thinking"),
+                "tool_call": chunk.get("tool_call"),
+                "tool_result": chunk.get("tool_result"),
                 "done": chunk.get("done", False),
                 "messages": chunk.get("messages"),
             })
