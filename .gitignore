@@ -17,6 +17,7 @@ dist/
 .idea/
 .vscode/
 *.swp
+.codex
 
 # Local data
 ~/.ward/
