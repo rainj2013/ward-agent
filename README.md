@@ -234,9 +234,6 @@ ward-agent/
 - [x] 封装 LLM 可调用的工具：get_stock_quote、get_stock_news、get_market_sentiment、search_stock
 - [x] 智能问答支持主动获取页面之外的信息（新闻、财报日历等）
 
-### Phase 8 — 外部测试验证
-- [ ] 从 AI 分析报告中提取关键断言
-- [ ] 用 K 线数据自动校验断言正确性
 ### Phase 8 — 智能上下文管理
 - [x] 基于 tiktoken token 计数器的消息历史压缩
 - [x] Token 超限后自动摘要：保留用户意图，压缩 Agent 执行过程
