@@ -703,23 +703,6 @@ header h1 {
   margin-right: 0.4em;
 }
 
-.think-cancel-btn {
-  background: transparent;
-  border: 1px solid #334155;
-  border-radius: 3px;
-  color: #94a3b8;
-  font-size: 0.75rem;
-  padding: 0 0.5em;
-  cursor: pointer;
-  margin-right: 0.4em;
-  vertical-align: middle;
-}
-
-.think-cancel-btn:hover {
-  border-color: #ef4444;
-  color: #ef4444;
-}
-
 .think-text {
   color: #94a3b8;
 }

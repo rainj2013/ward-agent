@@ -16,7 +16,7 @@ After starting the app, open `http://localhost:8000`. Configure credentials with
 
 ## Coding Style & Naming Conventions
 
-Use standard Python style: 4-space indentation, type hints where useful, module docstrings for entry points, and clear snake_case names. Keep FastAPI route handlers in `api/routes.py` thin; place market, chat, and database behavior in `services/`. Pydantic request and response types belong in `schemas/models.py`. Frontend code is plain HTML/CSS/JS; keep selectors descriptive and avoid introducing a framework without a clear need.
+Use standard Python style: 4-space indentation, type hints where useful, module docstrings for entry points, and clear snake_case names. Keep FastAPI route handlers in `api/routes.py` thin; place market, history, and database behavior in `services/`. Pydantic request and response types belong in `schemas/models.py`. Frontend code is plain HTML/CSS/JS; keep selectors descriptive and avoid introducing a framework without a clear need.
 
 ## Testing Guidelines
 

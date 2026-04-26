@@ -172,10 +172,11 @@ ward-agent/
 │   ├── api/routes.py          # FastAPI 路由
 │   ├── core/
 │   │   ├── config.py          # 配置管理（dotenv）
-│   │   └── data_fetcher*.py   # 数据抓取（akshare）
+│   │   └── data_fetcher.py    # 数据抓取（akshare + yfinance）
 │   ├── schemas/models.py      # Pydantic 模型
 │   ├── services/
-│   │   ├── chat_service.py    # AI 对话逻辑
+│   │   ├── history_service.py # 聊天历史查询
+│   │   ├── nasdaq_service.py  # 市场概览
 │   │   ├── index_service.py   # 指数行情 + AI 分析
 │   │   ├── stock_service.py   # 个股行情
 │   │   ├── report_service.py  # AI 报告生成
@@ -190,7 +191,7 @@ ward-agent/
 
 - **后端**：FastAPI + SQLite
 - **前端**：原生 HTML/CSS/JS（无框架依赖）
-- **数据源**：akshare（东方财富、新浪财经）
+- **数据源**：akshare + yfinance
 - **AI**：MiniMax API（Anthropic 兼容模式）
 
 ---

@@ -16,7 +16,6 @@ const _extendedCache = {}; // prefix -> { pre, regular, after, previous_close }
 const _indexKlineCache = {};    // prefix -> [{date, open, high, low, close, volume}, ...]
 const _stockKlineCache = {};    // symbol -> [{date, open, high, low, close, volume}, ...]
 const _stockAnalysisCache = {}; // symbol -> string (AI analysis text)
-let _marketReportCache = null;  // string (market AI report)
 let _indexAnalysisCache = {};   // prefix -> string (index AI analysis text)
 
 function fmt(num) {
@@ -339,7 +338,6 @@ async function generateReport() {
         }
       }
       content.innerHTML = html;
-      _marketReportCache = data.report;
     } else {
       content.innerHTML = `<p class="hint" style="color:#ef4444">生成失败: ${data.error}</p>`;
     }
@@ -582,7 +580,7 @@ async function sendChat() {
       if (report) ctx.index_analyses[prefix] = report;
     }
 
-    const payload = { conversation_id: conversationId, message };
+    const payload = { conversation_id: conversationId || 0, message };
     if (ctx.indices.length || ctx.stocks.length || Object.keys(ctx.index_klines).length || Object.keys(ctx.stock_klines).length || Object.keys(ctx.stock_analyses).length || Object.keys(ctx.index_analyses).length) {
       payload.context = ctx;
     }
@@ -605,7 +603,6 @@ async function sendChat() {
       const { value, done: readerDone } = await reader.read();
       done = readerDone;
       if (!value) continue;
-      console.log(`[stream] recv ${value.byteLength}B at +${Date.now()-reqStart}ms, done=${done}`);
 
       // Reusable buffer to reassemble SSE events split across TCP packets
       _sseBuffer = (_sseBuffer || '') + decoder.decode(value, { stream: !done });
@@ -843,8 +840,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!card) return;
     if (e.target.closest('[data-action]')) return;
     if (e.target.closest('.stock-analysis-card')) return;
-    const symbol = card.querySelector('.stock-result-symbol').textContent;
-    const name = card.querySelector('.stock-result-name').textContent;
+    const symbolEl = card.querySelector('.stock-result-symbol');
+    const nameEl = card.querySelector('.stock-result-name');
+    if (!symbolEl || !nameEl) return;
+    const symbol = symbolEl.textContent;
+    const name = nameEl.textContent;
     loadStockQuote(symbol, name, card);
   });
 });

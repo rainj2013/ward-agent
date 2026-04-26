@@ -44,7 +44,7 @@ src/ward/
 ├── schemas/
 │   └── models.py             # Pydantic request/response models + ChatContext
 ├── services/
-│   ├── chat_service.py       # Original ChatService (Anthropic streaming)
+│   ├── history_service.py    # Read-only chat history queries
 │   ├── nasdaq_service.py     # Market overview (indices + gold)
 │   ├── index_service.py      # Index quotes, K-lines, AI analysis
 │   ├── stock_service.py      # Stock quotes, search, K-lines, AI analysis
@@ -69,15 +69,9 @@ src/ward/
 
 ## Key Design Points
 
-### Two Agent Systems
+### Agent System
 
-The codebase has **two parallel agent implementations**:
-
-1. **WardMiniAgent** (`agent/ward_agent.py`) — newer, uses the `mini_agent/Agent` framework with `run_streaming()`. All new tool definitions live here (`ward_tools.py`).
-
-2. **ChatService** (`services/chat_service.py`) — original implementation, uses raw `Anthropic` SDK streaming. Kept for backward compatibility with history endpoints.
-
-Both are exposed via `/api/chat` (non-streaming) and `/api/chat/stream` (SSE). The routes use `WardMiniAgent` via `get_ward_agent()`.
+`WardMiniAgent` (`agent/ward_agent.py`) uses the `mini_agent/Agent` framework with `run_streaming()`. Tool definitions live in `agent/ward_tools.py` and are registered through `get_all_tools()`. `/api/chat` and `/api/chat/stream` both route through `WardMiniAgent`; history reads are handled separately by `HistoryService`.
 
 ### ChatContext
 
@@ -107,7 +101,6 @@ Conversation cancellation uses `asyncio.Event` stored in `_conversation_cancels`
 1. Create a new `Tool` subclass in `agent/ward_tools.py` (or `mini_agent/tools/base.py` if shared)
 2. Register it in `get_all_tools()`
 3. The tool will automatically be available to `WardMiniAgent`
-4. For ChatService tools, also add to `TOOLS` list in `services/chat_service.py`
 
 ## Database
 

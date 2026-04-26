@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from fastapi import APIRouter, HTTPException
+import asyncio
+
+from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from pathlib import Path
 
@@ -24,7 +26,7 @@ from ward.schemas.models import (
     StockSearchResponse,
 )
 from ward.agent.ward_agent import get_ward_agent
-from ward.services.chat_service import ChatService
+from ward.services.history_service import HistoryService
 from ward.services.index_service import IndexService
 from ward.services.nasdaq_service import MarketService
 from ward.services.report_service import ReportService
@@ -33,17 +35,12 @@ from ward.services.stock_service import StockService
 router = APIRouter()
 ms = MarketService()
 rs = ReportService()
-cs = ChatService()  # kept only for history endpoints
+hs = HistoryService()
 ss = StockService()
 is_ = IndexService()
 
 _static_dir = Path(__file__).parent.parent.parent.parent / "static"
 
-
-# ── Conversation cancellation registry ────────────────────────────────────────
-
-import asyncio
-from typing import Optional
 
 _conversation_cancels: dict[int, asyncio.Event] = {}
 
@@ -231,6 +228,8 @@ async def chat_stream(req: ChatRequest):
             # Fetch was aborted by client (e.g. user clicked cancel) — signal done
             yield f"data: {json.dumps({'ok': True, 'done': True, 'cancelled': True})}\n\n"
             raise
+        except Exception as exc:
+            yield f"data: {json.dumps({'ok': False, 'error': str(exc), 'done': True}, ensure_ascii=False)}\n\n"
         finally:
             _clear_cancel_event(req.conversation_id)
 
@@ -259,7 +258,7 @@ async def cancel_chat(conversation_id: int):
 @router.get("/api/history/{conversation_id}", response_model=HistoryResponse)
 async def get_history(conversation_id: int):
     """Get chat history for a conversation (latest 20 messages)."""
-    result = cs.get_history(conversation_id)
+    result = hs.get_history(conversation_id)
     return HistoryResponse(
         ok=result.get("ok", False),
         conversation_id=result.get("conversation_id"),
@@ -271,7 +270,7 @@ async def get_history(conversation_id: int):
 @router.get("/api/history/{conversation_id}/messages", response_model=HistoryPaginatedResponse)
 async def get_history_paginated(conversation_id: int, limit: int = 20, before_id: int | None = None):
     """Get older messages using cursor pagination (waterfall load)."""
-    result = cs.get_history_paginated(conversation_id, limit, before_id)
+    result = hs.get_history_paginated(conversation_id, limit, before_id)
     return HistoryPaginatedResponse(
         ok=result.get("ok", False),
         conversation_id=result.get("conversation_id"),
