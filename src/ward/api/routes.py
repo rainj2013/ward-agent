@@ -163,6 +163,18 @@ async def generate_report():
 
 # ── SSE helper ────────────────────────────────────────────────────────────────
 
+def _compact_tool_result(tool_result: dict | None) -> dict | None:
+    """Keep SSE tool status events small; the agent already has the full result."""
+    if not tool_result:
+        return None
+    return {
+        "id": tool_result.get("id"),
+        "name": tool_result.get("name"),
+        "ok": tool_result.get("ok"),
+        "error": tool_result.get("error"),
+    }
+
+
 async def sse_format(chunk: dict, conversation_id: int) -> str:
     """Format a chunk dict as an SSE data line."""
     conv_id = chunk.get("conversation_id", conversation_id)
@@ -172,10 +184,10 @@ async def sse_format(chunk: dict, conversation_id: int) -> str:
         "chunk": chunk.get("chunk", ""),
         "thinking": chunk.get("thinking"),
         "tool_call": chunk.get("tool_call"),
-        "tool_result": chunk.get("tool_result"),
+        "tool_result": _compact_tool_result(chunk.get("tool_result")),
         "done": chunk.get("done", False),
         "messages": chunk.get("messages"),
-    })
+    }, ensure_ascii=False, separators=(",", ":"))
     return f"data: {data}\n\n"
 
 

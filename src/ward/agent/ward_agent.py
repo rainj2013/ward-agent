@@ -214,8 +214,8 @@ class WardMiniAgent:
                     },
                 )
 
-        # Final done event
-        yield _make_sse_event(conversation_id, done=True, chunk=final_text)
+        # Final done event. Content has already been streamed as chunk events.
+        yield _make_sse_event(conversation_id, done=True)
 
 
 def _make_sse_event(
