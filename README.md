@@ -224,10 +224,6 @@ ward-agent/
 - [x] 支撑位/压力位标记
 - [x] 黄金分割线
 
----
-
-## Roadmap
-
 ### Phase 6 — Worker / Reviewer 角色分离 ❌
 - [ ] 指数和个股 AI 分析各自独立的 Worker Agent
 - [ ] Reviewer Agent 对报告打分，不合格自动重写（最多 3 次）
