@@ -228,15 +228,15 @@ ward-agent/
 
 ## Roadmap
 
-### Phase 6 — Worker / Reviewer 角色分离
+### Phase 6 — Worker / Reviewer 角色分离 ❌
 - [ ] 指数和个股 AI 分析各自独立的 Worker Agent
 - [ ] Reviewer Agent 对报告打分，不合格自动重写（最多 3 次）
 - [ ] 明确的停止条件：格式正确 + 技术指标覆盖完整 + 无事实性错误
 
-### Phase 7 — 外部 Tool Calling
-- [ ] AkShare / yfinance 接口标准化
-- [ ] 封装 LLM 可调用的工具：get_stock_quote、get_stock_news、get_market_sentiment、search_stock
-- [ ] 智能问答支持主动获取页面之外的信息（新闻、财报日历等）
+### Phase 7 — 外部 Tool Calling ✅
+- [x] AkShare / yfinance 接口标准化
+- [x] 封装 LLM 可调用的工具：get_stock_quote、get_stock_news、get_market_sentiment、search_stock
+- [x] 智能问答支持主动获取页面之外的信息（新闻、财报日历等）
 
 ### Phase 8 — 外部测试验证
 - [ ] 从 AI 分析报告中提取关键断言
