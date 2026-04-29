@@ -521,6 +521,134 @@ class IndexService:
             if text:
                 self._cache.set(cache_key, text, context)
 
+    def generate_analysis_stream(self, prefix: str):
+        """Stream AI analysis for a single index (or gold)."""
+        cache_key = f"index:{prefix}"
+        cached = self._cache.get(cache_key)
+        if cached:
+            mapping = self.PREFIX_MAP.get(prefix)
+            chn_name = mapping[2] if mapping else prefix
+            yield {"ok": True, "prefix": prefix, "name": chn_name, "chunk": cached["report"], "cached": True}
+            yield {"ok": True, "prefix": prefix, "name": chn_name, "report": cached["report"], "data": cached["data"], "cached": True, "done": True}
+            return
+
+        if prefix == "gold":
+            yield from self._generate_gold_analysis_stream(cache_key)
+            return
+
+        mapping = self.PREFIX_MAP.get(prefix)
+        if not mapping:
+            yield {"ok": False, "error": f"Unknown index prefix: {prefix}", "done": True}
+            return
+
+        yf_sym, eng_name, chn_name = mapping
+
+        quote = self._get_quote(yf_sym)
+        time.sleep(0.1)
+
+        df = self._get_historical(yf_sym, 60)
+        klines = []
+        if df is not None and not df.empty:
+            for dt, row in df.iterrows():
+                klines.append({
+                    "date":   dt.strftime("%Y-%m-%d"),
+                    "open":   round(float(row["Open"]), 2),
+                    "high":   round(float(row["High"]), 2),
+                    "low":    round(float(row["Low"]), 2),
+                    "close":  round(float(row["Close"]), 2),
+                    "volume": int(row["Volume"]),
+                })
+
+        tech = self._get_tech_indicators(df) if df is not None else {}
+        vix = self._get_vix()
+        news = self._fetch_news(limit=8)
+
+        context = {
+            "prefix": prefix,
+            "yf_symbol": yf_sym,
+            "name": chn_name,
+            "quote": quote,
+            "klines": klines,
+            "tech": tech,
+            "vix": vix,
+            "news": news,
+        }
+
+        vix_price = vix.get("price")
+        if vix_price:
+            if vix_price < 15:    vix_sentiment = "极度贪婪"
+            elif vix_price < 20:  vix_sentiment = "中性偏乐观"
+            elif vix_price < 30:  vix_sentiment = "恐慌"
+            else:                  vix_sentiment = "极度恐慌"
+        else:
+            vix_sentiment = "无数据"
+
+        if klines:
+            kline_table = "\n".join(
+                f"| {k['date']} | {k['open']:.2f} | {k['high']:.2f} | "
+                f"{k['low']:.2f} | {k['close']:.2f} | {k['volume']:,} |"
+                for k in klines
+            )
+            kline_md = f"| 日期 | 开盘 | 最高 | 最低 | 收盘 | 成交量 |\n|-----------|------|------|------|------|----------|\n{kline_table}"
+        else:
+            kline_md = "无数据"
+
+        macd = tech.get("macd", {})
+        bb   = tech.get("bollinger", {})
+        macd_cross = {1: "金叉", -1: "死叉", 0: "中性"}.get(macd.get("cross", 0), "无数据")
+        tech_md = (
+            f"- **当前点位**: {tech.get('current', '无数据')}\n"
+            f"- **均线**: MA5={tech.get('ma5')}, MA20={tech.get('ma20')}, MA60={tech.get('ma60')}\n"
+            f"- **趋势**: {tech.get('trend', '无数据')}\n"
+            f"- **RSI(14)**: {tech.get('rsi', '无数据')}\n"
+            f"- **MACD**: {macd_cross} (MACD={macd.get('macd')}, Signal={macd.get('signal')})\n"
+            f"- **布林带**: 上轨={bb.get('upper')}, 中轨={bb.get('middle')}, 下轨={bb.get('lower')}, 位置={bb.get('position')}"
+        )
+
+        news_md = "\n".join(f"- [{n.get('tag','?')}] {n.get('title','')}" for n in news) if news else "无数据"
+
+        user_prompt = f"""分析以下美国指数数据，生成结构化分析报告。
+
+=== {chn_name} 今日行情 ===
+- 现价: {quote.get('price', '无数据')}
+- 涨跌幅: {quote.get('change_pct', '?')}%
+- 今日开盘: {quote.get('open', '?')} | 最高: {quote.get('high', '?')} | 最低: {quote.get('low', '?')}
+- 成交量: {quote.get('volume', '无数据'):,}
+
+=== VIX 恐惧贪婪指标 ===
+- 当前值: {vix_price if vix_price else '无数据'}
+- 情绪: {vix_sentiment}
+
+=== {chn_name} 过去60个交易日K线 ===
+{kline_md}
+
+=== {chn_name} 技术指标 ===
+{tech_md}
+
+=== 市场新闻 ===
+{news_md}
+
+请生成专业分析报告，包含：今日行情总结、技术面深度分析、当前市场状态判断、操作建议。
+所有数据必须来自上面提供的数据，不要编造。报告用中文，突出重点。"""
+
+        text = ""
+        try:
+            with self._client.messages.stream(
+                model=get_config().llm.model,
+                max_tokens=6000,
+                system="你是一个专业的宏观策略分析师，擅长分析美国股市技术面和宏观走势。",
+                messages=[{"role": "user", "content": user_prompt}],
+            ) as stream:
+                for chunk in stream.text_stream:
+                    text += chunk
+                    yield {"ok": True, "prefix": prefix, "name": chn_name, "chunk": chunk}
+            yield {"ok": True, "prefix": prefix, "name": chn_name, "report": text, "data": context, "done": True}
+        except Exception as e:
+            yield {"ok": False, "error": str(e), "data": context, "done": True}
+        finally:
+            if text:
+                self._cache.set(cache_key, text, context)
+
     # ── Gold-specific analysis ────────────────────────────────────────────────
 
     def _generate_gold_analysis(self, cache_key: str) -> dict[str, Any]:
@@ -667,6 +795,126 @@ class IndexService:
                 "error": str(e),
                 "data": context,
             }
+        finally:
+            if text:
+                self._cache.set(cache_key, text, context)
+
+    def _generate_gold_analysis_stream(self, cache_key: str):
+        """Stream AI analysis for gold futures."""
+        yf_sym = "GC=F"
+        chn_name = "黄金期货"
+
+        quote = self._get_quote(yf_sym)
+        time.sleep(0.1)
+
+        df = self._get_historical(yf_sym, 60)
+        klines = []
+        if df is not None and not df.empty:
+            for dt, row in df.iterrows():
+                klines.append({
+                    "date":   dt.strftime("%Y-%m-%d"),
+                    "open":   round(float(row["Open"]), 2),
+                    "high":   round(float(row["High"]), 2),
+                    "low":    round(float(row["Low"]), 2),
+                    "close":  round(float(row["Close"]), 2),
+                    "volume": int(row["Volume"]),
+                })
+
+        tech = self._get_tech_indicators(df) if df is not None else {}
+        dxy = self._get_dxy()
+        time.sleep(0.1)
+        gld = self._get_gld_etf()
+        time.sleep(0.1)
+        spx = self._get_sp500_quote()
+        vix = self._get_vix()
+
+        context = {
+            "prefix": "gold",
+            "yf_symbol": yf_sym,
+            "name": chn_name,
+            "quote": quote,
+            "klines": klines,
+            "tech": tech,
+            "dxy": dxy,
+            "gld_etf": gld,
+            "sp500": spx,
+            "vix": vix,
+        }
+
+        gold_price = quote.get("price")
+        spx_price = spx.get("price")
+        gp_ratio = round(gold_price / spx_price, 4) if gold_price and spx_price else None
+
+        if klines:
+            kline_table = "\n".join(
+                f"| {k['date']} | {k['open']:.2f} | {k['high']:.2f} | "
+                f"{k['low']:.2f} | {k['close']:.2f} | {k['volume']:,} |"
+                for k in klines
+            )
+            kline_md = f"| 日期 | 开盘 | 最高 | 最低 | 收盘 | 成交量 |\n|-----------|------|------|------|------|----------|\n{kline_table}"
+        else:
+            kline_md = "无数据"
+
+        macd = tech.get("macd", {})
+        bb   = tech.get("bollinger", {})
+        macd_cross = {1: "金叉", -1: "死叉", 0: "中性"}.get(macd.get("cross", 0), "无数据")
+        tech_md = (
+            f"- **当前价格**: ${tech.get('current', '无数据')}\n"
+            f"- **均线**: MA5={tech.get('ma5')}, MA20={tech.get('ma20')}, MA60={tech.get('ma60')}\n"
+            f"- **趋势**: {tech.get('trend', '无数据')}\n"
+            f"- **RSI(14)**: {tech.get('rsi', '无数据')}\n"
+            f"- **MACD**: {macd_cross} (MACD={macd.get('macd')}, Signal={macd.get('signal')})\n"
+            f"- **布林带**: 上轨=${bb.get('upper')}, 中轨=${bb.get('middle')}, 下轨=${bb.get('lower')}, 位置={bb.get('position')}"
+        )
+
+        if df is not None and not df.empty:
+            recent_low = round(float(df["Low"].tail(20).min()), 2)
+            recent_high = round(float(df["High"].tail(20).max()), 2)
+        else:
+            recent_low = recent_high = None
+
+        user_prompt = f"""分析以下黄金期货数据，生成专业的贵金属市场分析报告。
+
+=== 黄金今日行情 ===
+- 现货价（GC=F）: ${quote.get('price', '无数据')}
+- 涨跌幅: {quote.get('change_pct', '?')}%
+- 今日开盘: ${quote.get('open', '?')} | 最高: ${quote.get('high', '?')} | 最低: ${quote.get('low', '?')}
+- 成交量: {quote.get('volume', '无数据'):,} 手
+
+=== 关联市场数据 ===
+- **美元指数 (DXY)**: {dxy.get('price', '无数据')}（涨跌: {dxy.get('change_pct', '无数据')}%）
+- **SPDR黄金ETF (GLD)**: ${gld.get('price', '无数据')}（涨跌: {gld.get('change_pct', '无数据')}%）
+- **标普500**: {spx.get('price', '无数据')}
+- **黄金/标普500比值**: {gp_ratio if gp_ratio else '无数据'}
+- **VIX恐慌指数**: {vix.get('price', '无数据')}
+
+=== 黄金过去60个交易日K线 ===
+{kline_md}
+
+=== 黄金技术指标 ===
+{tech_md}
+
+=== 关键价位参考 ===
+- 近期支撑: ${recent_low if recent_low else '无数据'}
+- 近期阻力: ${recent_high if recent_high else '无数据'}
+
+请生成专业黄金分析报告，包含：今日行情总结、宏观背景（美元/利率/通胀）、技术面深度分析、关键价位、操作建议。
+所有数据必须来自上面提供的数据，不要编造。报告用中文，突出重点。"""
+
+        text = ""
+        try:
+            with self._client.messages.stream(
+                model=get_config().llm.model,
+                max_tokens=6000,
+                system=self.GOLD_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_prompt}],
+            ) as stream:
+                for chunk in stream.text_stream:
+                    text += chunk
+                    yield {"ok": True, "prefix": "gold", "name": chn_name, "chunk": chunk}
+            yield {"ok": True, "prefix": "gold", "name": chn_name, "report": text, "data": context, "done": True}
+        except Exception as e:
+            yield {"ok": False, "error": str(e), "data": context, "done": True}
         finally:
             if text:
                 self._cache.set(cache_key, text, context)

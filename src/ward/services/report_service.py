@@ -123,7 +123,7 @@ class ReportService:
         try:
             response = self.client.messages.create(
                 model=self.config.llm.model,
-                max_tokens=800,
+                max_tokens=3000,
                 system="你是一个客观理性的金融市场情绪分析师。",
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -197,7 +197,7 @@ class ReportService:
         try:
             response = self.client.messages.create(
                 model=self.config.llm.model,
-                max_tokens=1500,
+                max_tokens=5000,
                 system=self.SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
             )
@@ -218,4 +218,63 @@ class ReportService:
             }
         finally:
             if "text" in dir() and text:
+                self._cache.set(cache_key, text, context)
+
+    def generate_market_report_stream(self):
+        """Stream today's Nasdaq market report from the LLM."""
+        cache_key = "market:report"
+        cached = self._cache.get(cache_key)
+        if cached:
+            yield {"ok": True, "chunk": cached["report"], "cached": True}
+            yield {"ok": True, "done": True, "report": cached["report"], "data": cached["data"], "cached": True}
+            return
+
+        overview = self.ns.get_market_overview()
+        news = self._fetch_news()
+        sentiment = self._analyze_sentiment(news)
+
+        context = {
+            "market_overview": overview,
+            "recent_news": [{"symbol": n["symbol"], "title": n["title"], "time": n["time"]} for n in news],
+            "sentiment": sentiment,
+        }
+
+        news_section = "\n".join(
+            f"- [{n['symbol']}] {n['title']}" for n in news
+        ) if news else "（无可用新闻）"
+
+        user_prompt = f"""请分析以下今日纳斯达克市场数据：
+
+=== 市场指数 ===
+{json.dumps(overview, indent=2, ensure_ascii=False, default=str)}
+
+=== 近期新闻标题 ===
+{news_section}
+
+=== AI 情绪分析结果 ===
+{sentiment.get('interpretation', '')}
+
+请给出今日市场的综合分析报告，包括：
+1. 今日行情概述
+2. 关键技术指标
+3. 市场情绪判断（结合新闻和情绪评分）
+4. 关键新闻事件摘要
+5. 简短的投资思考"""
+
+        text = ""
+        try:
+            with self.client.messages.stream(
+                model=self.config.llm.model,
+                max_tokens=5000,
+                system=self.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_prompt}],
+            ) as stream:
+                for chunk in stream.text_stream:
+                    text += chunk
+                    yield {"ok": True, "chunk": chunk}
+            yield {"ok": True, "done": True, "report": text, "data": context}
+        except Exception as e:
+            yield {"ok": False, "error": str(e), "done": True, "data": context}
+        finally:
+            if text:
                 self._cache.set(cache_key, text, context)

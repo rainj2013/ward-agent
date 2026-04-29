@@ -44,6 +44,8 @@ _static_dir = Path(__file__).parent.parent.parent.parent / "static"
 
 _conversation_cancels: dict[int, asyncio.Event] = {}
 
+_CACHED_STREAM_CHARS = 32
+
 
 def _get_or_create_cancel_event(conversation_id: int) -> asyncio.Event:
     """Get existing cancel event or create new one for a conversation."""
@@ -55,6 +57,52 @@ def _get_or_create_cancel_event(conversation_id: int) -> asyncio.Event:
 def _clear_cancel_event(conversation_id: int) -> None:
     """Remove cancel event after conversation ends."""
     _conversation_cancels.pop(conversation_id, None)
+
+
+def _sse_data(chunk: dict) -> str:
+    """Format a chunk dict as a compact SSE data event."""
+    data = json.dumps(chunk, ensure_ascii=False, separators=(",", ":"))
+    return f"data: {data}\n\n"
+
+
+def _split_cached_text(text: str, size: int = _CACHED_STREAM_CHARS):
+    """Split cached reports so the UI still renders progressively."""
+    for i in range(0, len(text), size):
+        yield text[i:i + size]
+
+
+async def _stream_llm_chunks(chunks):
+    """Stream sync LLM chunk generators as SSE, including cached reports."""
+    try:
+        for chunk in chunks:
+            text = chunk.get("chunk")
+            if chunk.get("cached") and text and not chunk.get("done"):
+                base = dict(chunk)
+                base.pop("chunk", None)
+                for part in _split_cached_text(text):
+                    yield _sse_data({**base, "chunk": part})
+                    await asyncio.sleep(0.02)
+            else:
+                yield _sse_data(chunk)
+                await asyncio.sleep(0)
+
+            if chunk.get("done"):
+                break
+    except Exception as exc:
+        yield _sse_data({"ok": False, "error": str(exc), "done": True})
+
+
+def _sse_response(generator):
+    """Create a StreamingResponse with headers that discourage buffering."""
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Transfer-Encoding": "chunked",
+        },
+    )
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -146,6 +194,12 @@ async def analyze_index(prefix: str):
     )
 
 
+@router.get("/api/index/{prefix}/analyze/stream")
+async def analyze_index_stream(prefix: str):
+    """Stream AI-powered analysis for a single US index."""
+    return _sse_response(_stream_llm_chunks(is_.generate_analysis_stream(prefix)))
+
+
 @router.get("/api/report", response_model=ReportResponse)
 async def generate_report():
     """Generate LLM-powered market report."""
@@ -156,6 +210,12 @@ async def generate_report():
         data=result.get("data"),
         error=result.get("error"),
     )
+
+
+@router.get("/api/report/stream")
+async def generate_report_stream():
+    """Stream LLM-powered market report."""
+    return _sse_response(_stream_llm_chunks(rs.generate_market_report_stream()))
 
 
 # ── SSE helper ────────────────────────────────────────────────────────────────
@@ -340,6 +400,12 @@ async def analyze_stock(symbol: str):
         cached=result.get("cached"),
         error=result.get("error"),
     )
+
+
+@router.get("/api/stock/{symbol}/analyze/stream")
+async def analyze_stock_stream(symbol: str):
+    """Stream AI-powered stock analysis report."""
+    return _sse_response(_stream_llm_chunks(ss.generate_analysis_stream(symbol)))
 
 
 @router.get("/api/stock/{symbol}/extended", response_model=ExtendedPriceResponse)

@@ -406,6 +406,178 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
             if "report" in dir() and report:
                 self._cache.set(cache_key, report, context)
 
+    def generate_analysis_stream(self, symbol: str):
+        """Stream AI-powered stock analysis report."""
+        symbol = symbol.upper()
+        name = POPULAR_STOCKS.get(symbol, symbol)
+
+        cache_key = f"stock:{symbol}"
+        cached = self._cache.get(cache_key)
+        if cached:
+            yield {"ok": True, "symbol": symbol, "name": name, "chunk": cached["report"], "cached": True}
+            yield {"ok": True, "symbol": symbol, "name": name, "report": cached["report"], "data": cached["data"], "cached": True, "done": True}
+            return
+
+        quote = self.get_quote(symbol)
+        hist_30d = self.get_historical(symbol, 30)
+        hist_5d = self.get_historical(symbol, 5)
+        financials = self._get_financials(symbol)
+        news = self._fetch_news(symbol)
+        money_flow = self._get_money_flow(symbol)
+
+        context = {
+            "symbol": symbol,
+            "name": name,
+            "quote": quote.get("data") if quote.get("ok") else None,
+            "history_5d": hist_5d.get("data") if hist_5d.get("ok") else [],
+            "history_30d": hist_30d.get("data") if hist_30d.get("ok") else [],
+            "financials": financials,
+            "news": news,
+            "money_flow": money_flow,
+        }
+
+        quote_data = context["quote"]
+        fin = financials
+
+        def fmt_currency(v):
+            if v is None: return "无数据"
+            if abs(v) >= 1e12: return f"${v/1e12:.2f}万亿"
+            if abs(v) >= 1e9: return f"${v/1e9:.2f}亿"
+            if abs(v) >= 1e6: return f"${v/1e6:.2f}百万"
+            return f"${v:.2f}"
+
+        def fmt_pct(v):
+            if v is None: return "无数据"
+            return f"{v*100:.2f}%" if isinstance(v, float) else str(v)
+
+        income_lines = []
+        if fin.get("income_stmt"):
+            is_ = fin["income_stmt"]
+            income_lines.append(f"  营收 (Revenue): {fmt_currency(is_.get('Total Revenue'))}")
+            income_lines.append(f"  毛利润 (Gross Profit): {fmt_currency(is_.get('Gross Profit'))}")
+            income_lines.append(f"  净利润 (Net Income): {fmt_currency(is_.get('Net Income'))}")
+            income_lines.append(f"  运营利润 (Operating Income): {fmt_currency(is_.get('Operating Income'))}")
+            income_lines.append(f"  EPS (Diluted): {is_.get('Diluted EPS', '无数据')}")
+
+        balance_lines = []
+        if fin.get("balance_sheet"):
+            bs = fin["balance_sheet"]
+            balance_lines.append(f"  总资产 (Total Assets): {fmt_currency(bs.get('Total Assets'))}")
+            balance_lines.append(f"  总负债 (Total Liabilities): {fmt_currency(bs.get('Total Liabilities'))}")
+            balance_lines.append(f"  股东权益 (Total Equity): {fmt_currency(bs.get('Total Equity'))}")
+            balance_lines.append(f"  流动资产 (Current Assets): {fmt_currency(bs.get('Current Assets'))}")
+
+        cashflow_lines = []
+        if fin.get("cashflow"):
+            cf = fin["cashflow"]
+            cashflow_lines.append(f"  运营现金流 (Operating Cashflow): {fmt_currency(cf.get('Operating Cash Flow'))}")
+            cashflow_lines.append(f"  自由现金流 (Free Cashflow): {fmt_currency(cf.get('Free Cash Flow'))}")
+            cashflow_lines.append(f"  资本支出 (Capex): {fmt_currency(cf.get('Capital Expenditure'))}")
+
+        analyst_info = quote_data.get("analyst_targets", {}) if quote_data else {}
+        recommendation = quote_data.get("recommendation", "无数据") if quote_data else "无数据"
+        target_low = analyst_info.get("target_low", "无数据")
+        target_high = analyst_info.get("target_high", "无数据")
+        target_mean = analyst_info.get("target_mean", "无数据")
+        target_upside = analyst_info.get("target_upside", "无数据")
+
+        news_section = "\n".join(
+            f"- [{n['time'][:10]}] {n['title']}（来源: {n['source']}）"
+            for n in news
+        ) if news else "无数据"
+
+        mf = money_flow
+        inst_pct = mf.get("inst_pct", "无数据")
+        if inst_pct != "无数据":
+            inst_pct = f"{inst_pct:.2f}%"
+
+        inst_lines = []
+        for row in mf.get("institutions", [])[:5]:
+            inst_lines.append(f"  {row['holder']}: {row['pct']:.2f}% 持股")
+
+        insider_lines = []
+        for row in mf.get("insider_transactions", [])[:5]:
+            val_str = f"${row['value']/1e6:.2f}百万" if row['value'] else "未披露金额"
+            insider_lines.append(f"  {row['date'][:10]} | {row['insider']} | {row['transaction']} | {row['shares']}股 | {val_str}")
+
+        sd = mf.get("short_data", {})
+        short_str = f"做空比例: {sd.get('short_percent_float', '无数据')}% | 做空天数: {sd.get('short_ratio', '无数据')}天"
+
+        user_prompt = f"""请分析以下股票数据，生成专业分析报告。
+
+=== 股票基本信息 ===
+代码: {symbol}
+名称: {name}
+
+=== 今日行情 ===
+当前价: ${quote_data.get('price', '无数据') if quote_data else '无数据'}
+昨收: ${quote_data.get('previous_close', '无数据') if quote_data else '无数据'}
+今开: ${quote_data.get('open', '无数据') if quote_data else '无数据'}
+日内高: ${quote_data.get('high', '无数据') if quote_data else '无数据'}
+日内低: ${quote_data.get('low', '无数据') if quote_data else '无数据'}
+涨跌幅: {quote_data.get('change_pct', '无数据')}% if quote_data else '无数据'
+成交量: {quote_data.get('volume', '无数据') if quote_data else '无数据'}
+市值: {fmt_currency(quote_data.get('market_cap', 0)) if quote_data and quote_data.get('market_cap') else '无数据'}
+市盈率 (Trailing P/E): {quote_data.get('pe_ratio', '无数据') if quote_data else '无数据'}
+Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无数据'}
+股息率: {fmt_pct(quote_data.get('dividend_yield', 0)) if quote_data and quote_data.get('dividend_yield') else '无数据'}
+营收增长 (YoY): {fmt_pct(quote_data.get('revenue_growth', 0)) if quote_data and quote_data.get('revenue_growth') else '无数据'}
+利润率 (Profit Margin): {fmt_pct(quote_data.get('profit_margin', 0)) if quote_data and quote_data.get('profit_margin') else '无数据'}
+52周高: ${quote_data.get('fifty_two_week_high', '无数据') if quote_data else '无数据'}
+52周低: ${quote_data.get('fifty_two_week_low', '无数据') if quote_data else '无数据'}
+
+=== 资金流向 ===
+机构持股比例: {inst_pct}
+前三大机构股东:
+{chr(10).join(inst_lines) if inst_lines else '无数据'}
+
+近期内部人交易:
+{chr(10).join(insider_lines) if insider_lines else '无数据'}
+
+做空数据: {short_str}
+
+=== 新闻舆情 ===
+{news_section}
+
+=== 分析师评级 ===
+综合评级: {recommendation}
+目标价区间: ${target_low} - ${target_high}
+目标价均值: ${target_mean}
+上涨空间: {fmt_pct(target_upside) if target_upside else '无数据'}
+
+=== 利润表 (近4季度) ===
+{chr(10).join(income_lines) if income_lines else '无数据'}
+
+=== 资产负债表 ===
+{chr(10).join(balance_lines) if balance_lines else '无数据'}
+
+=== 现金流量表 ===
+{chr(10).join(cashflow_lines) if cashflow_lines else '无数据'}
+
+=== 近5日K线 ===
+{json.dumps(context['history_5d'], indent=2, ensure_ascii=False, default=str) if context['history_5d'] else '无数据'}
+
+=== 近30日K线 ===
+{json.dumps(context['history_30d'], indent=2, ensure_ascii=False, default=str) if context['history_30d'] else '无数据'}"""
+
+        report = ""
+        try:
+            with self._llm().messages.stream(
+                model=get_config().llm.model,
+                max_tokens=6000,
+                system=self.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_prompt}],
+            ) as stream:
+                for chunk in stream.text_stream:
+                    report += chunk
+                    yield {"ok": True, "symbol": symbol, "name": name, "chunk": chunk}
+            yield {"ok": True, "symbol": symbol, "name": name, "report": report, "data": context, "done": True}
+        except Exception as e:
+            yield {"ok": False, "symbol": symbol, "name": name, "error": str(e), "data": context, "done": True}
+        finally:
+            if report:
+                self._cache.set(cache_key, report, context)
+
     def search(self, query: str) -> dict[str, Any]:
         """Search stocks by symbol or name."""
         query = query.upper()

@@ -307,22 +307,15 @@ async function generateReport() {
   btn.textContent = '生成中...';
   content.innerHTML = '<p class="hint">正在调用 AI 分析，请稍候...</p>';
 
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error('请求超时（90秒）')), 90000);
-  });
-
   try {
-    const resp = await Promise.race([
-      fetch('/api/report'),
-      timeoutPromise
-    ]);
-    clearTimeout(timeoutId);
-    const data = await resp.json();
-    if (data.ok) {
-      let html = marked.parse(data.report);
-      // 附加情绪评分卡片
-      if (data.data && data.data.sentiment) {
+    await streamTextResponse(
+      '/api/report/stream',
+      (report) => {
+        renderStreamingHtml(content, renderMarkdown(report));
+      },
+      (report, data) => {
+        let html = renderMarkdown(report);
+        if (data.data && data.data.sentiment) {
         const s = data.data.sentiment;
         if (s.score !== null) {
           const scoreColor = s.score >= 6 ? '#22c55e' : s.score >= 4 ? '#f59e0b' : '#ef4444';
@@ -337,10 +330,9 @@ async function generateReport() {
           </div>`;
         }
       }
-      content.innerHTML = html;
-    } else {
-      content.innerHTML = `<p class="hint" style="color:#ef4444">生成失败: ${data.error}</p>`;
-    }
+      renderStreamingHtml(content, html);
+      }
+    );
   } catch (e) {
     content.innerHTML = `<p class="hint" style="color:#ef4444">请求失败: ${e.message}</p>`;
   } finally {
@@ -364,6 +356,62 @@ function parseSseEvent(rawEvent) {
     .map(line => line.slice(5).replace(/^ /, ''));
   if (!dataLines.length) return null;
   return JSON.parse(dataLines.join('\n'));
+}
+
+async function streamTextResponse(url, onChunk, onDone) {
+  const resp = await fetch(url);
+  if (!resp.ok || !resp.body) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() || '';
+
+    for (const raw of parts) {
+      const data = parseSseEvent(raw);
+      if (!data) continue;
+      if (!data.ok) {
+        throw new Error(data.error || '未知错误');
+      }
+      if (data.chunk) {
+        fullText += data.chunk;
+        onChunk(fullText, data);
+      }
+      if (data.done) {
+        const finalText = data.report || fullText;
+        if (finalText !== fullText) {
+          fullText = finalText;
+          onChunk(fullText, data);
+        }
+        onDone(fullText, data);
+        return;
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const data = parseSseEvent(buffer);
+    if (data && !data.ok) throw new Error(data.error || '未知错误');
+    if (data && data.chunk) {
+      fullText += data.chunk;
+      onChunk(fullText, data);
+    }
+    if (data && data.done) {
+      const finalText = data.report || fullText;
+      onDone(finalText, data);
+    }
+  }
 }
 
 async function initChat() {
@@ -737,20 +785,21 @@ function handleIndexAnalyze(prefix, name, btn) {
     }
     btn.textContent = '分析中...';
     btn.disabled = true;
-    fetch('/api/index/' + prefix + '/analyze')
-      .then(r => r.json())
-      .then(data => {
+    container.style.display = 'block';
+    container.innerHTML = '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-analysis-content"><p class="hint">正在调用 AI 分析，请稍候...</p></div>';
+    streamTextResponse(
+      '/api/index/' + prefix + '/analyze/stream',
+      (report) => {
+        renderStreamingHtml(container, '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-analysis-content">' + renderMarkdown(report) + '</div>');
+      },
+      (report) => {
         btn.textContent = '🧠 AI分析';
         btn.disabled = false;
-        if (!data.ok || !data.report) {
-          container.innerHTML = '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-error">分析失败: ' + (data.error || '未知错误') + '</div>';
-        } else {
-          container.innerHTML = '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-analysis-content">' + (typeof marked !== 'undefined' ? marked.parse(data.report) : escapeHtml(data.report)) + '</div>';
-          if (!_indexAnalysisCache) _indexAnalysisCache = {};
-          _indexAnalysisCache[prefix] = data.report;
-        }
-        container.style.display = 'block';
-      })
+        renderStreamingHtml(container, '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-analysis-content">' + renderMarkdown(report) + '</div>');
+        if (!_indexAnalysisCache) _indexAnalysisCache = {};
+        _indexAnalysisCache[prefix] = report;
+      }
+    )
       .catch(err => {
         btn.textContent = '🧠 AI分析';
         btn.disabled = false;
@@ -769,19 +818,20 @@ function handleAnalyzeAction(symbol, name, btn) {
     }
     btn.textContent = '分析中...';
     btn.disabled = true;
-    fetch(`/api/stock/${symbol}/analyze`)
-      .then(r => r.json())
-      .then(data => {
+    container.style.display = 'block';
+    container.innerHTML = '<h3>📊 ' + symbol + ' 个股 AI 分析报告</h3><div class="stock-analysis-content"><p class="hint">正在调用 AI 分析，请稍候...</p></div>';
+    streamTextResponse(
+      `/api/stock/${symbol}/analyze/stream`,
+      (report) => {
+        renderStreamingHtml(container, '<h3>📊 ' + symbol + ' 个股 AI 分析报告</h3><div class="stock-analysis-content">' + renderMarkdown(report) + '</div>');
+      },
+      (report) => {
         btn.textContent = '🧠 AI分析';
         btn.disabled = false;
-        if (!data.ok || !data.report) {
-          container.innerHTML = '<h3>📊 ' + symbol + ' 个股 AI 分析报告</h3><div class="stock-error">分析失败: ' + (data.error || '未知错误') + '</div>';
-        } else {
-          container.innerHTML = '<h3>📊 ' + symbol + ' 个股 AI 分析报告</h3><div class="stock-analysis-content">' + (typeof marked !== 'undefined' ? marked.parse(data.report) : escapeHtml(data.report)) + '</div>';
-          _stockAnalysisCache[symbol] = data.report;
-        }
-        container.style.display = 'block';
-      })
+        renderStreamingHtml(container, '<h3>📊 ' + symbol + ' 个股 AI 分析报告</h3><div class="stock-analysis-content">' + renderMarkdown(report) + '</div>');
+        _stockAnalysisCache[symbol] = report;
+      }
+    )
       .catch(err => {
         btn.textContent = '🧠 AI分析';
         btn.disabled = false;
@@ -983,28 +1033,54 @@ async function loadStockAnalysis(symbol, name, btn) {
   }
   btn.textContent = '分析中...';
   btn.disabled = true;
+  container.style.display = 'block';
+  container.innerHTML = `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-analysis-content"><p class="hint">正在调用 AI 分析，请稍候...</p></div>`;
   try {
-    const resp = await fetch(`/api/stock/${symbol}/analyze`);
-    const data = await resp.json();
-    btn.textContent = 'AI 分析';
-    btn.disabled = false;
-    if (!data.ok || !data.report) {
-      container.innerHTML = `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-error">分析失败: ${data.error || '未知错误'}</div>`;
-    } else {
-      container.innerHTML = `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-analysis-content">${typeof marked !== 'undefined' ? marked.parse(data.report) : escapeHtml(data.report)}</div>`;
-      _stockAnalysisCache[symbol] = data.report;
-    }
-    container.style.display = 'block';
+    await streamTextResponse(
+      `/api/stock/${symbol}/analyze/stream`,
+      (report) => {
+        renderStreamingHtml(container, `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-analysis-content">${renderMarkdown(report)}</div>`);
+      },
+      (report) => {
+        renderStreamingHtml(container, `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-analysis-content">${renderMarkdown(report)}</div>`);
+        _stockAnalysisCache[symbol] = report;
+      }
+    );
   } catch (e) {
-    btn.textContent = 'AI 分析';
-    btn.disabled = false;
     container.innerHTML = `<h3>分析报告（${symbol}）</h3><div class="stock-error">请求失败: ${e.message}</div>`;
     container.style.display = 'block';
+  } finally {
+    btn.textContent = 'AI 分析';
+    btn.disabled = false;
   }
 }
 
 function escapeHtml(text) {
   return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderMarkdown(text) {
+  return typeof marked !== 'undefined' ? marked.parse(text) : escapeHtml(text);
+}
+
+function keepStreamingOutputInView(container) {
+  requestAnimationFrame(() => {
+    const innerScroller = container.querySelector('.stock-analysis-content');
+    if (innerScroller) {
+      innerScroller.scrollTop = innerScroller.scrollHeight;
+    }
+
+    const rect = container.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    if (rect.bottom > viewportHeight || rect.top < 0) {
+      window.scrollBy({ top: rect.bottom - viewportHeight + 24, behavior: 'auto' });
+    }
+  });
+}
+
+function renderStreamingHtml(container, html) {
+  container.innerHTML = html;
+  keepStreamingOutputInView(container);
 }
 
 // K-line chart
