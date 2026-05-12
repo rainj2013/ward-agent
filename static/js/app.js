@@ -17,6 +17,7 @@ const _indexKlineCache = {};    // prefix -> [{date, open, high, low, close, vol
 const _stockKlineCache = {};    // symbol -> [{date, open, high, low, close, volume}, ...]
 const _stockAnalysisCache = {}; // symbol -> string (AI analysis text)
 let _indexAnalysisCache = {};   // prefix -> string (index AI analysis text)
+let _runtimeStatsRange = '1d';
 
 function fmt(num) {
   if (num === null || num === undefined) return '--';
@@ -305,7 +306,7 @@ async function generateReport() {
   const content = document.getElementById('report-content');
   btn.disabled = true;
   btn.textContent = '生成中...';
-  content.innerHTML = '<p class="hint">正在调用 AI 分析，请稍候...</p>';
+  content.innerHTML = '<p class="hint">正在生成分析报告，请稍候...</p>';
 
   try {
     await streamTextResponse(
@@ -414,7 +415,236 @@ async function streamTextResponse(url, onChunk, onDone) {
   }
 }
 
+async function runAnalysisJob(createUrl, onStatus, onDone) {
+  const createResp = await fetch(createUrl, { method: 'POST' });
+  if (!createResp.ok) {
+    throw new Error(`HTTP ${createResp.status}`);
+  }
+  const created = await createResp.json();
+  if (!created.ok || !created.job) {
+    throw new Error(created.error || '创建分析任务失败');
+  }
+  rememberRuntimeJob(created.job.id);
+  onStatus(formatAnalysisJobStatus({ message: '任务已创建', stage: 'queued', job: created.job }), {
+    job: created.job,
+    stage: 'queued',
+    message: '任务已创建',
+  });
+
+  const resp = await fetch(`/api/analysis-jobs/${created.job.id}/events`);
+  if (!resp.ok || !resp.body) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() || '';
+
+    for (const raw of parts) {
+      const data = parseSseEvent(raw);
+      if (!data) continue;
+      if (!data.ok) throw new Error(data.error || '分析任务失败');
+      if (data.message) onStatus(formatAnalysisJobStatus(data), data);
+      if (data.done) {
+        const job = data.job;
+        if (!job || job.status !== 'succeeded' || !job.result) {
+          throw new Error((job && job.error) || '分析任务失败');
+        }
+        onDone(job.result.report || '', job.result, job);
+        return;
+      }
+    }
+  }
+
+  throw new Error('分析任务连接中断');
+}
+
+function rememberRuntimeJob(jobId) {
+  if (!jobId) return;
+  const input = document.getElementById('runtime-job-input');
+  if (input) input.value = jobId;
+}
+
+function renderAnalysisStatus(container, title, message, jobId) {
+  const jobHtml = jobId ? `<div class="analysis-job-meta">Job: <code>${escapeHtml(jobId)}</code> · <a href="/runtime?job_id=${encodeURIComponent(jobId)}" target="_blank" rel="noopener">查看 Trace</a></div>` : '';
+  container.innerHTML = `${title}<div class="stock-analysis-content"><p class="hint">${escapeHtml(message)}</p>${jobHtml}</div>`;
+}
+
+function renderAnalysisReport(container, title, report, jobId) {
+  const jobHtml = jobId ? `<div class="analysis-job-meta">Job: <code>${escapeHtml(jobId)}</code> · <a href="/runtime?job_id=${encodeURIComponent(jobId)}" target="_blank" rel="noopener">查看 Trace</a></div>` : '';
+  renderStreamingHtml(container, `${title}<div class="stock-analysis-content">${renderMarkdown(report)}${jobHtml}</div>`);
+}
+
+async function loadRuntimeStats(range = _runtimeStatsRange, btn = null) {
+  _runtimeStatsRange = range;
+  document.querySelectorAll('.runtime-range-btn').forEach(el => {
+    el.classList.toggle('active', el.dataset.range === range);
+  });
+  if (btn) btn.classList.add('active');
+
+  const container = document.getElementById('runtime-stats');
+  if (!container) return;
+  container.innerHTML = '<div class="runtime-muted">加载运行统计中...</div>';
+
+  try {
+    const resp = await fetch(`/api/runtime/stats?range=${encodeURIComponent(range)}`);
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || '统计加载失败');
+    renderRuntimeStats(data.stats);
+  } catch (e) {
+    container.innerHTML = `<div class="runtime-muted">统计加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function loadRuntimeJobFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const jobId = params.get('job_id');
+  if (!jobId) return;
+  const input = document.getElementById('runtime-job-input');
+  if (input) input.value = jobId;
+  loadRuntimeTrace();
+}
+
+function renderRuntimeStats(stats) {
+  const container = document.getElementById('runtime-stats');
+  if (!container) return;
+  const items = [
+    ['任务数', stats.jobs_total],
+    ['成功 / 失败', `${stats.jobs_succeeded} / ${stats.jobs_failed}`],
+    ['缓存命中率', `${Math.round((stats.cache_hit_rate || 0) * 100)}%`],
+    ['LLM 调用', stats.llm_calls],
+    ['Tokens', fmtRuntimeNumber(stats.total_tokens)],
+    ['平均耗时', formatDurationMs(stats.avg_duration_ms)],
+  ];
+  container.innerHTML = items.map(([label, value]) => `
+    <div class="runtime-stat">
+      <div class="runtime-stat-label">${escapeHtml(label)}</div>
+      <div class="runtime-stat-value">${escapeHtml(String(value ?? '--'))}</div>
+    </div>
+  `).join('');
+}
+
+async function loadRuntimeTrace() {
+  const input = document.getElementById('runtime-job-input');
+  const container = document.getElementById('runtime-trace');
+  if (!input || !container) return;
+  const jobId = input.value.trim();
+  if (!jobId) {
+    container.innerHTML = '<div class="runtime-muted">请输入 job id。</div>';
+    return;
+  }
+  container.innerHTML = '<div class="runtime-muted">加载 trace 中...</div>';
+
+  try {
+    const resp = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/trace`);
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || 'Trace 加载失败');
+    renderRuntimeTrace(data.job, data.events || []);
+  } catch (e) {
+    container.innerHTML = `<div class="runtime-muted">Trace 加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderRuntimeTrace(job, events) {
+  const container = document.getElementById('runtime-trace');
+  if (!container) return;
+  const usage = job.usage || {};
+  const summary = [
+    ['状态', job.status],
+    ['类型', job.type],
+    ['耗时', formatDurationMs(job.duration_ms)],
+    ['Tokens', fmtRuntimeNumber(usage.total_tokens || 0)],
+  ].map(([label, value]) => `
+    <div class="runtime-stat">
+      <div class="runtime-stat-label">${escapeHtml(label)}</div>
+      <div class="runtime-stat-value">${escapeHtml(String(value ?? '--'))}</div>
+    </div>
+  `).join('');
+
+  const eventHtml = events.map(ev => {
+    const data = ev.data ? JSON.stringify(ev.data, null, 2) : '';
+    return `
+      <div class="runtime-event">
+        <div class="runtime-event-time">${escapeHtml(formatTraceTime(ev.created_at))}</div>
+        <div class="runtime-event-stage">${escapeHtml(ev.stage || ev.event || '--')}</div>
+        <div class="runtime-event-message">${escapeHtml(ev.message || '')}</div>
+        <div class="runtime-event-duration">${escapeHtml(formatDurationMs(ev.duration_ms))}</div>
+        ${data ? `<div class="runtime-event-data">${escapeHtml(data)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="runtime-trace-summary">${summary}</div>
+    ${eventHtml || '<div class="runtime-muted">暂无事件。</div>'}
+  `;
+}
+
+function refreshRuntimePanel() {
+  loadRuntimeStats(_runtimeStatsRange);
+}
+
+function formatDurationMs(ms) {
+  if (ms === null || ms === undefined) return '--';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function fmtRuntimeNumber(value) {
+  if (value === null || value === undefined) return '--';
+  return Number(value).toLocaleString('en-US');
+}
+
+function formatTraceTime(value) {
+  if (!value) return '--';
+  const d = new Date(value + (value.endsWith('Z') ? '' : 'Z'));
+  if (Number.isNaN(d.getTime())) return value.slice(11, 19);
+  return d.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function formatAnalysisJobStatus(data) {
+  const eventData = data.data || {};
+  const job = data.job || {};
+  const stage = data.stage || job.stage;
+  let message = data.message || job.stage_message || '分析任务处理中';
+
+  if (stage === 'queued') {
+    const pos = eventData.queue_position || job.queue_position;
+    const wait = eventData.estimated_wait_seconds;
+    if (pos) message += `，前面还有 ${Math.max(pos - 1, 0)} 个任务`;
+    if (wait) message += `，预计等待约 ${wait} 秒`;
+  }
+
+  if (stage === 'cache_check') {
+    message = '正在检查是否已有可复用分析';
+  } else if (stage === 'cache_hit') {
+    message = '命中缓存，已复用现有分析';
+  } else if (stage === 'fetching_data') {
+    message = data.event === 'stage_end' ? '基础数据获取完成' : '正在获取行情、K线、新闻和财务数据';
+  } else if (stage === 'llm_generating') {
+    message = data.event === 'llm_call_end' ? '模型分析报告生成完成' : '正在等待模型生成分析报告';
+  } else if (stage === 'execute_handler') {
+    message = '正在执行分析任务';
+  } else if (stage === 'succeeded' && eventData.cache_hit) {
+    message = '命中缓存，已复用现有分析';
+  }
+
+  return message;
+}
+
 async function initChat() {
+  if (!document.getElementById('chat-messages')) {
+    return;
+  }
   if (!conversationId) {
     _historyLoaded = false; // fresh conversation
     return;
@@ -786,22 +1016,23 @@ function handleIndexAnalyze(prefix, name, btn) {
     btn.textContent = '分析中...';
     btn.disabled = true;
     container.style.display = 'block';
-    container.innerHTML = '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-analysis-content"><p class="hint">正在调用 AI 分析，请稍候...</p></div>';
-    streamTextResponse(
-      '/api/index/' + prefix + '/analyze/stream',
-      (report) => {
-        renderStreamingHtml(container, '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-analysis-content">' + renderMarkdown(report) + '</div>');
-      },
-      (report) => {
-        btn.textContent = '🧠 AI分析';
+    container.innerHTML = '<h3>' + name + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
+    runAnalysisJob(
+      '/api/analysis-jobs/index/' + prefix,
+      (message, data) => {
+        const jobId = data && data.job ? data.job.id : null;
+        renderAnalysisStatus(container, '<h3>' + name + ' 分析报告</h3>', message, jobId);
+       },
+       (report, result, job) => {
+         btn.textContent = '分析';
         btn.disabled = false;
-        renderStreamingHtml(container, '<h3>📊 ' + name + ' AI 分析报告</h3><div class="stock-analysis-content">' + renderMarkdown(report) + '</div>');
+        renderAnalysisReport(container, '<h3>' + name + ' 分析报告</h3>', report, job && job.id);
         if (!_indexAnalysisCache) _indexAnalysisCache = {};
         _indexAnalysisCache[prefix] = report;
       }
     )
       .catch(err => {
-        btn.textContent = '🧠 AI分析';
+        btn.textContent = '分析';
         btn.disabled = false;
         container.innerHTML = '<h3>分析报告</h3><div class="stock-error">请求失败: ' + err.message + '</div>';
         container.style.display = 'block';
@@ -819,21 +1050,22 @@ function handleAnalyzeAction(symbol, name, btn) {
     btn.textContent = '分析中...';
     btn.disabled = true;
     container.style.display = 'block';
-    container.innerHTML = '<h3>📊 ' + symbol + ' 个股 AI 分析报告</h3><div class="stock-analysis-content"><p class="hint">正在调用 AI 分析，请稍候...</p></div>';
-    streamTextResponse(
-      `/api/stock/${symbol}/analyze/stream`,
-      (report) => {
-        renderStreamingHtml(container, '<h3>📊 ' + symbol + ' 个股 AI 分析报告</h3><div class="stock-analysis-content">' + renderMarkdown(report) + '</div>');
-      },
-      (report) => {
-        btn.textContent = '🧠 AI分析';
+    container.innerHTML = '<h3>' + name + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
+    runAnalysisJob(
+      `/api/analysis-jobs/stock/${symbol}`,
+      (message, data) => {
+        const jobId = data && data.job ? data.job.id : null;
+        renderAnalysisStatus(container, '<h3>' + name + ' 分析报告</h3>', message, jobId);
+       },
+       (report, result, job) => {
+         btn.textContent = '分析';
         btn.disabled = false;
-        renderStreamingHtml(container, '<h3>📊 ' + symbol + ' 个股 AI 分析报告</h3><div class="stock-analysis-content">' + renderMarkdown(report) + '</div>');
+        renderAnalysisReport(container, '<h3>' + name + ' 分析报告</h3>', report, job && job.id);
         _stockAnalysisCache[symbol] = report;
       }
     )
       .catch(err => {
-        btn.textContent = '🧠 AI分析';
+        btn.textContent = '分析';
         btn.disabled = false;
         container.innerHTML = '<h3>分析报告（' + symbol + '）</h3><div class="stock-error">请求失败: ' + err.message + '</div>';
         container.style.display = 'block';
@@ -849,6 +1081,10 @@ function handleAnalyzeAction(symbol, name, btn) {
       return;
     }
     container.style.display = 'block';
+    if (savedData && savedData.length) {
+      renderStockChart(container, symbol, name, savedData);
+      return;
+    }
     container.innerHTML = '<div class="stock-chart-loading">加载K线数据中...</div>';
     fetch(`/api/stock/${symbol}/kline?days=60`)
       .then(r => r.json())
@@ -866,8 +1102,14 @@ function handleAnalyzeAction(symbol, name, btn) {
   }
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadMarketData();
-  loadExtendedHours();
+  if (document.getElementById('market-cards')) {
+    loadMarketData();
+    loadExtendedHours();
+  }
+  if (document.getElementById('runtime-stats')) {
+    loadRuntimeStats('1d');
+    loadRuntimeJobFromUrl();
+  }
 
   // Delegated button clicks — data-action buttons inside stock cards
   document.addEventListener('click', (e) => {
@@ -890,6 +1132,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!card) return;
     if (e.target.closest('[data-action]')) return;
     if (e.target.closest('.stock-analysis-card')) return;
+    if (e.target.closest('.stock-chart-container')) return;
     const symbolEl = card.querySelector('.stock-result-symbol');
     const nameEl = card.querySelector('.stock-result-name');
     if (!symbolEl || !nameEl) return;
@@ -981,8 +1224,8 @@ async function loadStockQuote(symbol, name, card) {
       <span>成交量 ${fmt(d.volume)}</span>
     </div>
     <div class="stock-result-actions">
-      <button class="stock-analyze-btn" data-action="analyze" data-symbol="${symbol}" data-name="${name}">🧠 AI分析</button>
-      <button class="stock-chart-btn" data-action="chart" data-symbol="${symbol}" data-name="${name}">📊 K线图</button>
+      <button class="stock-analyze-btn" data-action="analyze" data-symbol="${symbol}" data-name="${name}">分析</button>
+      <button class="stock-chart-btn" data-action="chart" data-symbol="${symbol}" data-name="${name}">K线</button>
     </div>
     <div id="chart-${symbol}" class="stock-chart-container" style="display:none"></div>
     <div id="analysis-${symbol}" class="stock-analysis-card" style="display:none"></div>`;
@@ -1015,7 +1258,7 @@ async function loadStockQuote(symbol, name, card) {
 
     if (analysisVisible && analysisReport) {
       newAnalysisEl.style.display = 'block';
-      newAnalysisEl.innerHTML = `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-analysis-content">${typeof marked !== 'undefined' ? marked.parse(analysisReport) : escapeHtml(analysisReport)}</div>`;
+      newAnalysisEl.innerHTML = `<h3>${symbol} 分析报告</h3><div class="stock-analysis-content">${typeof marked !== 'undefined' ? marked.parse(analysisReport) : escapeHtml(analysisReport)}</div>`;
     } else if (analysisVisible && analysisContent) {
       newAnalysisEl.style.display = 'block';
       newAnalysisEl.innerHTML = analysisContent;
@@ -1034,15 +1277,16 @@ async function loadStockAnalysis(symbol, name, btn) {
   btn.textContent = '分析中...';
   btn.disabled = true;
   container.style.display = 'block';
-  container.innerHTML = `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-analysis-content"><p class="hint">正在调用 AI 分析，请稍候...</p></div>`;
+    container.innerHTML = '<h3>' + name + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
   try {
-    await streamTextResponse(
-      `/api/stock/${symbol}/analyze/stream`,
-      (report) => {
-        renderStreamingHtml(container, `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-analysis-content">${renderMarkdown(report)}</div>`);
-      },
-      (report) => {
-        renderStreamingHtml(container, `<h3>📊 ${symbol} 个股 AI 分析报告</h3><div class="stock-analysis-content">${renderMarkdown(report)}</div>`);
+    await runAnalysisJob(
+      `/api/analysis-jobs/stock/${symbol}`,
+      (message, data) => {
+        const jobId = data && data.job ? data.job.id : null;
+        renderAnalysisStatus(container, '<h3>' + name + ' 分析报告</h3>', message, jobId);
+       },
+       (report, result, job) => {
+         btn.textContent = '分析';
         _stockAnalysisCache[symbol] = report;
       }
     );
@@ -1050,7 +1294,7 @@ async function loadStockAnalysis(symbol, name, btn) {
     container.innerHTML = `<h3>分析报告（${symbol}）</h3><div class="stock-error">请求失败: ${e.message}</div>`;
     container.style.display = 'block';
   } finally {
-    btn.textContent = 'AI 分析';
+    btn.textContent = '分析';
     btn.disabled = false;
   }
 }

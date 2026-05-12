@@ -11,8 +11,7 @@
 <body>
   <div class="container">
     <header>
-      <h1>📈 Ward</h1>
-      <p class="subtitle">美股市场数据分析</p>
+      <h1>Ward</h1>
       <div class="market-status" id="market-status">
         <span class="status-dot" id="status-dot"></span>
         <span id="status-text">检测中...</span>
@@ -42,8 +41,8 @@
           </div>
         </div>
         <div class="card-footer" style="display:none">
-          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('ixic','Nasdaq 综合',this)">🧠 AI分析</button>
-          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('ixic','Nasdaq 综合')">📊 K线图</button>
+          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('ixic','Nasdaq 综合',this)">分析</button>
+          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('ixic','Nasdaq 综合')">K线</button>
         </div>
         <div id="index-chart-ixic" class="index-chart-container" style="display:none"></div>
       </div>
@@ -68,8 +67,8 @@
           </div>
         </div>
         <div class="card-footer" style="display:none">
-          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('dji','道琼斯',this)">🧠 AI分析</button>
-          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('dji','道琼斯')">📊 K线图</button>
+          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('dji','道琼斯',this)">分析</button>
+          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('dji','道琼斯')">K线</button>
         </div>
         <div id="index-chart-dji" class="index-chart-container" style="display:none"></div>
       </div>
@@ -94,8 +93,8 @@
           </div>
         </div>
         <div class="card-footer" style="display:none">
-          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('spx','标普 500',this)">🧠 AI分析</button>
-          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('spx','标普 500')">📊 K线图</button>
+          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('spx','标普 500',this)">分析</button>
+          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('spx','标普 500')">K线</button>
         </div>
         <div id="index-chart-spx" class="index-chart-container" style="display:none"></div>
       </div>
@@ -120,8 +119,8 @@
           </div>
         </div>
         <div class="card-footer" style="display:none">
-          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('gold','黄金',this)">🧠 AI分析</button>
-          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('gold','黄金')">📊 K线图</button>
+          <button class="stock-analyze-btn" onclick="event.stopPropagation();handleIndexAnalyze('gold','黄金',this)">分析</button>
+          <button class="index-chart-btn" onclick="event.stopPropagation();toggleIndexChart('gold','黄金')">K线</button>
         </div>
         <div id="index-chart-gold" class="index-chart-container" style="display:none"></div>
       </div>
@@ -145,7 +144,7 @@
     <!-- Extended Hours Bar -->
     <section class="extended-section" id="extended-section" style="display:none">
       <div class="extended-header">
-        <span class="extended-title">🕐 盘前 / 盘中 / 盘后</span>
+        <span class="extended-title">盘前 · 盘中 · 盘后</span>
         <span class="extended-subtitle">数据来源：ETF（QQQ / SPY / DIA）</span>
       </div>
       <div class="extended-row">
@@ -205,7 +204,7 @@
 
     <!-- Stock Search Section -->
     <section class="stock-section">
-      <h2>🔍 个股查询</h2>
+      <h2>个股查询</h2>
       <div class="stock-search-row">
         <input type="text" id="stock-search-input" placeholder="输入股票代码或名称，如 AAPL、NVDA" onkeydown="if(event.key==='Enter')searchStock()" />
         <button onclick="searchStock()">搜索</button>
@@ -215,16 +214,16 @@
 
     <!-- AI Report Section -->
     <section class="report-section">
-      <h2>🤖 AI 市场分析报告</h2>
+      <h2>市场分析报告</h2>
       <button id="generate-btn" onclick="generateReport()">生成报告</button>
       <div id="report-content" class="report-content">
-        <p class="hint">点击上方按钮，AI 将基于今日数据生成分析报告</p>
+        <p class="hint">基于今日市场数据生成分析报告</p>
       </div>
     </section>
 
     <!-- Chat Section -->
     <section class="chat-section">
-      <h2>💬 智能问答</h2>
+      <h2>智能问答</h2>
       <div class="chat-container">
         <div class="chat-messages" id="chat-messages">
           <button id="chat-load-more-btn" onclick="loadMoreMessages()" style="display:none">加载更多消息</button>
@@ -236,8 +235,12 @@
         </div>
       </div>
     </section>
+
+    <footer class="site-footer">
+      <a href="/runtime">Runtime</a>
+    </footer>
   </div>
 
-  <script src="/static/js/app.js?v=9"></script>
+  <script src="/static/js/app.js?v=10"></script>
 </body>
 </html>

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ward Runtime</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="container runtime-page">
+    <header>
+      <h1>Ward Runtime</h1>
+      <div class="runtime-nav">
+        <a href="/">← 返回 Ward</a>
+      </div>
+    </header>
+
+    <div class="runtime-subtitle">任务队列 · Trace · 成本统计</div>
+
+    <section class="runtime-section">
+      <div class="runtime-header">
+        <h2>运行统计</h2>
+        <div class="runtime-actions">
+          <button class="runtime-range-btn active" data-range="1d" onclick="loadRuntimeStats('1d', this)">1D</button>
+          <button class="runtime-range-btn" data-range="7d" onclick="loadRuntimeStats('7d', this)">7D</button>
+          <button class="runtime-range-btn" data-range="30d" onclick="loadRuntimeStats('30d', this)">30D</button>
+          <button class="runtime-refresh-btn" onclick="refreshRuntimePanel()">刷新</button>
+        </div>
+      </div>
+      <div id="runtime-stats" class="runtime-stats-grid">
+        <div class="runtime-muted">加载运行统计中...</div>
+      </div>
+    </section>
+
+    <section class="runtime-section">
+      <div class="runtime-header">
+        <h2>Trace 查询</h2>
+      </div>
+      <div class="runtime-trace-row">
+        <input id="runtime-job-input" type="text" placeholder="输入 job id 查看 trace，例如 job_xxx" onkeydown="if(event.key==='Enter')loadRuntimeTrace()" />
+        <button onclick="loadRuntimeTrace()">查看 Trace</button>
+      </div>
+      <div id="runtime-trace" class="runtime-trace">
+        <div class="runtime-muted">AI 分析任务完成或失败后，可用 job id 查看完整 trace。</div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/js/app.js?v=11"></script>
+</body>
+</html>
