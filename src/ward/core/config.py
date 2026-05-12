@@ -16,8 +16,8 @@ load_dotenv(_project_root / ".env", override=False)
 
 class LLMConfig(BaseModel):
     api_key: str
-    base_url: str = "https://api.minimaxi.com/anthropic"
-    model: str = "babog-3.1-chat"
+    base_url: str = "https://api.deepseek.com/anthropic"
+    model: str = "deepseek-v4-flash"
 
 
 class DatabaseConfig(BaseModel):
@@ -34,9 +34,21 @@ class Config(BaseModel):
 
 def load_config() -> Config:
     """Load config from environment variables (loaded from .env by python-dotenv)."""
-    api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("MINIMAX_PORTAL_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
-    base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
-    model = os.environ.get("LLM_MODEL", "MiniMax-M2.7-highspeed")
+    api_key = (
+        os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        or os.environ.get("DEEPSEEK_API_KEY")
+        or os.environ.get("API_KEY")
+        or os.environ.get("MINIMAX_API_KEY")
+        or os.environ.get("MINIMAX_PORTAL_API_KEY")
+        or ""
+    )
+    base_url = (
+        os.environ.get("ANTHROPIC_BASE_URL")
+        or os.environ.get("DEEPSEEK_API_URL")
+        or os.environ.get("URL")
+        or "https://api.deepseek.com/anthropic"
+    )
+    model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
 
     # Web server
     # PUBLIC_MODE=1 或 WARD_PUBLIC_MODE=1 时绑定 0.0.0.0（允许外部访问），默认只绑定 127.0.0.1

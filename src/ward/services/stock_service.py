@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
+from time import perf_counter
 from typing import Any
 
 import pandas as pd
@@ -39,6 +40,23 @@ POPULAR_STOCKS = {
     "JPM": "JPMorgan Chase",
     "JNJ": "Johnson & Johnson",
 }
+
+
+def _extract_llm_usage(response: Any) -> dict[str, Any]:
+    """Normalize Anthropic-compatible usage metadata for runtime stats."""
+    raw = getattr(response, "usage", None)
+    input_tokens = int(getattr(raw, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(raw, "output_tokens", 0) or 0)
+    cache_read = int(getattr(raw, "cache_read_input_tokens", 0) or 0)
+    cache_creation = int(getattr(raw, "cache_creation_input_tokens", 0) or 0)
+    total_input = input_tokens + cache_read + cache_creation
+    return {
+        "provider": "anthropic-compatible",
+        "model": get_config().llm.model,
+        "input_tokens": total_input,
+        "output_tokens": output_tokens,
+        "total_tokens": total_input + output_tokens,
+    }
 
 
 class StockService:
@@ -218,23 +236,41 @@ class StockService:
     def _llm(self) -> Anthropic:
         return self._client
 
-    def generate_analysis(self, symbol: str) -> dict[str, Any]:
+    def generate_analysis(self, symbol: str, trace=None) -> dict[str, Any]:
         """Generate AI-powered stock analysis report."""
         symbol = symbol.upper()
         name = POPULAR_STOCKS.get(symbol, symbol)
 
-        cache_key = f"stock:{symbol}"
+        cache_key = f"stock:{symbol}:model:{get_config().llm.model}"
         cached = self._cache.get(cache_key)
         if cached:
+            if trace:
+                trace("cache_hit", "命中缓存，已复用现有分析", "cache_hit", {"cache_key": cache_key})
             return {"ok": True, "symbol": symbol, "name": name, "report": cached["report"], "data": cached["data"], "cached": True}
+        if trace:
+            trace("cache_miss", "缓存未命中，准备获取最新数据", "fetching_data", {"cache_key": cache_key})
 
         # Gather all available data
+        fetch_started = perf_counter()
         quote = self.get_quote(symbol)
         hist_30d = self.get_historical(symbol, 30)
         hist_5d = self.get_historical(symbol, 5)
         financials = self._get_financials(symbol)
         news = self._fetch_news(symbol)
         money_flow = self._get_money_flow(symbol)
+        if trace:
+            trace(
+                "stage_end",
+                "行情、K线、新闻和财务数据获取完成",
+                "fetching_data",
+                {
+                    "quote_ok": quote.get("ok", False),
+                    "history_30d_count": len(hist_30d.get("data", [])) if hist_30d.get("ok") else 0,
+                    "history_5d_count": len(hist_5d.get("data", [])) if hist_5d.get("ok") else 0,
+                    "news_count": len(news),
+                },
+                int((perf_counter() - fetch_started) * 1000),
+            )
 
         # Build data context for LLM
         context = {
@@ -379,6 +415,19 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
 {json.dumps(context['history_30d'], indent=2, ensure_ascii=False, default=str) if context['history_30d'] else '无数据'}"""
 
         try:
+            llm_started = perf_counter()
+            if trace:
+                trace(
+                    "llm_call_start",
+                    "正在等待模型生成分析报告",
+                    "llm_generating",
+                    {
+                        "model": get_config().llm.model,
+                        "max_tokens": 6000,
+                        "system": self.SYSTEM_PROMPT,
+                        "messages": [{"role": "user", "content": user_prompt}],
+                    },
+                )
             response = self._llm().messages.create(
                 model=get_config().llm.model,
                 max_tokens=6000,
@@ -387,12 +436,22 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
             )
             text_blocks = [block.text if hasattr(block, "text") else "" for block in response.content]
             report = "\n".join(text_blocks) if text_blocks else ""
+            usage = _extract_llm_usage(response)
+            if trace:
+                trace(
+                    "llm_call_end",
+                    "模型分析报告生成完成",
+                    "llm_generating",
+                    {"usage": usage, "response_text": report},
+                    int((perf_counter() - llm_started) * 1000),
+                )
             return {
                 "ok": True,
                 "symbol": symbol,
                 "name": name,
                 "report": report,
                 "data": context,
+                "usage": usage,
             }
         except Exception as e:
             return {
@@ -411,7 +470,7 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
         symbol = symbol.upper()
         name = POPULAR_STOCKS.get(symbol, symbol)
 
-        cache_key = f"stock:{symbol}"
+        cache_key = f"stock:{symbol}:model:{get_config().llm.model}"
         cached = self._cache.get(cache_key)
         if cached:
             yield {"ok": True, "symbol": symbol, "name": name, "chunk": cached["report"], "cached": True}

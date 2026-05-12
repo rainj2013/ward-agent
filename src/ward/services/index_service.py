@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import date, timedelta
+from time import perf_counter
 from typing import Any
 
 import akshare as ak
@@ -23,6 +24,23 @@ SUPPORTED_INDICES = {
     "^DJI": ("Dow Jones", "道琼斯工业指数", "美国传统蓝筹股指数"),
     "GC=F": ("Gold", "黄金期货", "全球避险资产和通胀对冲工具"),
 }
+
+
+def _extract_llm_usage(response: Any) -> dict[str, Any]:
+    """Normalize Anthropic-compatible usage metadata for runtime stats."""
+    raw = getattr(response, "usage", None)
+    input_tokens = int(getattr(raw, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(raw, "output_tokens", 0) or 0)
+    cache_read = int(getattr(raw, "cache_read_input_tokens", 0) or 0)
+    cache_creation = int(getattr(raw, "cache_creation_input_tokens", 0) or 0)
+    total_input = input_tokens + cache_read + cache_creation
+    return {
+        "provider": "anthropic-compatible",
+        "model": get_config().llm.model,
+        "input_tokens": total_input,
+        "output_tokens": output_tokens,
+        "total_tokens": total_input + output_tokens,
+    }
 
 
 class IndexService:
@@ -366,11 +384,13 @@ class IndexService:
 ---
 注意：所有数据必须来自提供的市场数据，不要编造数字。报告用中文撰写，突出重点，不要废话。"""
 
-    def generate_analysis(self, prefix: str) -> dict[str, Any]:
+    def generate_analysis(self, prefix: str, trace=None) -> dict[str, Any]:
         """Generate AI analysis for a single index (or gold), with raw 60-day K-line data."""
-        cache_key = f"index:{prefix}"
+        cache_key = f"index:{prefix}:model:{get_config().llm.model}"
         cached = self._cache.get(cache_key)
         if cached:
+            if trace:
+                trace("cache_hit", "命中缓存，已复用现有分析", "cache_hit", {"cache_key": cache_key})
             # Look up by PREFIX_MAP first (has all prefixes), then by yfinance symbol
             mapping = self.PREFIX_MAP.get(prefix)
             if mapping:
@@ -381,10 +401,12 @@ class IndexService:
                     prefix
                 )
             return {"ok": True, "prefix": prefix, "name": chn_name, "report": cached["report"], "data": cached["data"], "cached": True}
+        if trace:
+            trace("cache_miss", "缓存未命中，准备获取最新数据", "fetching_data", {"cache_key": cache_key})
 
         # ── Gold branch ────────────────────────────────────────────────
         if prefix == "gold":
-            return self._generate_gold_analysis(cache_key)
+            return self._generate_gold_analysis(cache_key, trace=trace)
 
         # ── Regular index branch ────────────────────────────────────────
         mapping = self.PREFIX_MAP.get(prefix)
@@ -394,6 +416,7 @@ class IndexService:
         yf_sym, eng_name, chn_name = mapping
 
         # 1. Quote
+        fetch_started = perf_counter()
         quote = self._get_quote(yf_sym)
         time.sleep(0.1)
 
@@ -419,6 +442,14 @@ class IndexService:
 
         # 5. News
         news = self._fetch_news(limit=8)
+        if trace:
+            trace(
+                "stage_end",
+                "指数行情、K线、VIX和新闻获取完成",
+                "fetching_data",
+                {"quote_ok": "error" not in quote, "kline_count": len(klines), "news_count": len(news), "vix_ok": bool(vix.get("price"))},
+                int((perf_counter() - fetch_started) * 1000),
+            )
 
         context = {
             "prefix": prefix,
@@ -494,6 +525,19 @@ class IndexService:
 
         text = ""
         try:
+            llm_started = perf_counter()
+            if trace:
+                trace(
+                    "llm_call_start",
+                    "正在等待模型生成分析报告",
+                    "llm_generating",
+                    {
+                        "model": get_config().llm.model,
+                        "max_tokens": 6000,
+                        "system": "你是一个专业的宏观策略分析师，擅长分析美国股市技术面和宏观走势。",
+                        "messages": [{"role": "user", "content": user_prompt}],
+                    },
+                )
             response = self._client.messages.create(
                 model=get_config().llm.model,
                 max_tokens=6000,
@@ -504,12 +548,22 @@ class IndexService:
                 block.text if hasattr(block, "text") else ""
                 for block in response.content
             )
+            usage = _extract_llm_usage(response)
+            if trace:
+                trace(
+                    "llm_call_end",
+                    "模型分析报告生成完成",
+                    "llm_generating",
+                    {"usage": usage, "response_text": text},
+                    int((perf_counter() - llm_started) * 1000),
+                )
             return {
                 "ok": True,
                 "prefix": prefix,
                 "name": chn_name,
                 "report": text,
                 "data": context,
+                "usage": usage,
             }
         except Exception as e:
             return {
@@ -523,7 +577,7 @@ class IndexService:
 
     def generate_analysis_stream(self, prefix: str):
         """Stream AI analysis for a single index (or gold)."""
-        cache_key = f"index:{prefix}"
+        cache_key = f"index:{prefix}:model:{get_config().llm.model}"
         cached = self._cache.get(cache_key)
         if cached:
             mapping = self.PREFIX_MAP.get(prefix)
@@ -651,12 +705,13 @@ class IndexService:
 
     # ── Gold-specific analysis ────────────────────────────────────────────────
 
-    def _generate_gold_analysis(self, cache_key: str) -> dict[str, Any]:
+    def _generate_gold_analysis(self, cache_key: str, trace=None) -> dict[str, Any]:
         """Generate AI analysis for gold futures."""
         yf_sym = "GC=F"
         chn_name = "黄金期货"
 
         # 1. Gold quote
+        fetch_started = perf_counter()
         quote = self._get_quote(yf_sym)
         time.sleep(0.1)
 
@@ -690,6 +745,21 @@ class IndexService:
 
         # 7. VIX
         vix = self._get_vix()
+        if trace:
+            trace(
+                "stage_end",
+                "黄金行情、K线、美元指数、GLD和VIX数据获取完成",
+                "fetching_data",
+                {
+                    "quote_ok": "error" not in quote,
+                    "kline_count": len(klines),
+                    "dxy_ok": bool(dxy.get("price")),
+                    "gld_ok": bool(gld.get("price")),
+                    "sp500_ok": bool(spx.get("price")),
+                    "vix_ok": bool(vix.get("price")),
+                },
+                int((perf_counter() - fetch_started) * 1000),
+            )
 
         context = {
             "prefix": "gold",
@@ -772,6 +842,19 @@ class IndexService:
 
         text = ""
         try:
+            llm_started = perf_counter()
+            if trace:
+                trace(
+                    "llm_call_start",
+                    "正在等待模型生成黄金分析报告",
+                    "llm_generating",
+                    {
+                        "model": get_config().llm.model,
+                        "max_tokens": 6000,
+                        "system": self.GOLD_SYSTEM_PROMPT,
+                        "messages": [{"role": "user", "content": user_prompt}],
+                    },
+                )
             response = self._client.messages.create(
                 model=get_config().llm.model,
                 max_tokens=6000,
@@ -782,12 +865,22 @@ class IndexService:
                 block.text if hasattr(block, "text") else ""
                 for block in response.content
             )
+            usage = _extract_llm_usage(response)
+            if trace:
+                trace(
+                    "llm_call_end",
+                    "模型黄金分析报告生成完成",
+                    "llm_generating",
+                    {"usage": usage, "response_text": text},
+                    int((perf_counter() - llm_started) * 1000),
+                )
             return {
                 "ok": True,
                 "prefix": "gold",
                 "name": chn_name,
                 "report": text,
                 "data": context,
+                "usage": usage,
             }
         except Exception as e:
             return {

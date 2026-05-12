@@ -174,6 +174,18 @@ class IndexAnalysisResponse(BaseModel):
     error: str | None = None
 
 
+class AnalysisJobCreateResponse(BaseModel):
+    ok: bool
+    job: dict | None = None
+    error: str | None = None
+
+
+class AnalysisJobResponse(BaseModel):
+    ok: bool
+    job: dict | None = None
+    error: str | None = None
+
+
 class ExtendedPriceResponse(BaseModel):
     ok: bool
     symbol: str | None = None

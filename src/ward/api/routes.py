@@ -10,6 +10,8 @@ from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from pathlib import Path
 
 from ward.schemas.models import (
+    AnalysisJobCreateResponse,
+    AnalysisJobResponse,
     ChatRequest,
     ChatResponse,
     ExtendedPriceResponse,
@@ -26,6 +28,7 @@ from ward.schemas.models import (
     StockSearchResponse,
 )
 from ward.agent.ward_agent import get_ward_agent
+from ward.services.analysis_job_service import AnalysisJobService
 from ward.services.history_service import HistoryService
 from ward.services.index_service import IndexService
 from ward.services.nasdaq_service import MarketService
@@ -38,6 +41,9 @@ rs = ReportService()
 hs = HistoryService()
 ss = StockService()
 is_ = IndexService()
+ajs = AnalysisJobService(concurrency=1)
+ajs.register_handler("stock_analysis", lambda payload: ss.generate_analysis(payload["symbol"], trace=payload.get("_trace")))
+ajs.register_handler("index_analysis", lambda payload: is_.generate_analysis(payload["prefix"], trace=payload.get("_trace")))
 
 _static_dir = Path(__file__).parent.parent.parent.parent / "static"
 
@@ -105,10 +111,46 @@ def _sse_response(generator):
     )
 
 
+def _terminal_job_status(status: str | None) -> bool:
+    return status in {"succeeded", "failed", "cancelled"}
+
+
+async def _analysis_job_event_stream(job_id: str):
+    """Stream persisted analysis job events until the job reaches a terminal state."""
+    last_event_id = 0
+    while True:
+        job = ajs.get_job(job_id)
+        if not job:
+            yield _sse_data({"ok": False, "error": "Job not found", "done": True})
+            return
+
+        events = ajs.get_events(job_id, last_event_id)
+        for event in events:
+            last_event_id = event["id"]
+            payload = {"ok": True, **event, "job": job, "done": False}
+            if _terminal_job_status(job.get("status")) and event["event"] in {"succeeded", "failed"}:
+                payload["job"] = ajs.get_job(job_id)
+                payload["done"] = True
+            yield _sse_data(payload)
+
+        if _terminal_job_status(job.get("status")):
+            if not events:
+                yield _sse_data({"ok": True, "event": "done", "job": job, "done": True})
+            return
+
+        await asyncio.sleep(0.5)
+
+
 @router.get("/", response_class=HTMLResponse)
 async def home():
     """Serve the main web page."""
     return FileResponse(str(_static_dir / "index.html"))
+
+
+@router.get("/runtime", response_class=HTMLResponse)
+async def runtime_page():
+    """Serve the runtime observability page."""
+    return FileResponse(str(_static_dir / "runtime.html"))
 
 
 @router.get("/api/quote", response_model=QuoteResponse)
@@ -198,6 +240,56 @@ async def analyze_index(prefix: str):
 async def analyze_index_stream(prefix: str):
     """Stream AI-powered analysis for a single US index."""
     return _sse_response(_stream_llm_chunks(is_.generate_analysis_stream(prefix)))
+
+
+@router.post("/api/analysis-jobs/index/{prefix}", response_model=AnalysisJobCreateResponse)
+async def create_index_analysis_job(prefix: str):
+    """Create a queued AI analysis job for an index."""
+    try:
+        job = await ajs.create_job("index_analysis", {"prefix": prefix})
+        return AnalysisJobCreateResponse(ok=True, job=job)
+    except Exception as exc:
+        return AnalysisJobCreateResponse(ok=False, error=str(exc))
+
+
+@router.post("/api/analysis-jobs/stock/{symbol}", response_model=AnalysisJobCreateResponse)
+async def create_stock_analysis_job(symbol: str):
+    """Create a queued AI analysis job for a stock."""
+    try:
+        job = await ajs.create_job("stock_analysis", {"symbol": symbol.upper()})
+        return AnalysisJobCreateResponse(ok=True, job=job)
+    except Exception as exc:
+        return AnalysisJobCreateResponse(ok=False, error=str(exc))
+
+
+@router.get("/api/analysis-jobs/{job_id}", response_model=AnalysisJobResponse)
+async def get_analysis_job(job_id: str):
+    """Get the latest persisted state for an analysis job."""
+    job = ajs.get_job(job_id)
+    if not job:
+        return AnalysisJobResponse(ok=False, error="Job not found")
+    return AnalysisJobResponse(ok=True, job=job)
+
+
+@router.get("/api/analysis-jobs/{job_id}/trace")
+async def get_analysis_job_trace(job_id: str):
+    """Get full structured trace for an analysis job."""
+    trace = ajs.get_trace(job_id)
+    if not trace:
+        return {"ok": False, "error": "Job not found"}
+    return {"ok": True, **trace}
+
+
+@router.get("/api/analysis-jobs/{job_id}/events")
+async def stream_analysis_job_events(job_id: str):
+    """Stream queued/running/completed events for an analysis job."""
+    return _sse_response(_analysis_job_event_stream(job_id))
+
+
+@router.get("/api/runtime/stats")
+async def get_runtime_stats(range: str = "1d"):
+    """Get aggregate runtime stats for analysis jobs."""
+    return {"ok": True, "stats": ajs.get_stats(range)}
 
 
 @router.get("/api/report", response_model=ReportResponse)

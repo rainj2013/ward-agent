@@ -48,12 +48,19 @@ class AnalysisCacheService:
     # Public API
     # ------------------------------------------------------------------
 
-    # Cache expires after 5 minutes (300 seconds)
-    _TTL_SECONDS = 300
+    # Default cache expires after 5 minutes. Slow LLM analysis gets a longer
+    # window because it is expensive and rate-limited.
+    _DEFAULT_TTL_SECONDS = 300
+    _ANALYSIS_TTL_SECONDS = 900
+
+    def _ttl_seconds(self, cache_key: str) -> int:
+        if cache_key.startswith(("stock:", "index:")):
+            return self._ANALYSIS_TTL_SECONDS
+        return self._DEFAULT_TTL_SECONDS
 
     def get(self, cache_key: str) -> dict[str, Any] | None:
         """
-        Return cached report if it was created within _TTL_SECONDS.
+        Return cached report if it was created within the key-specific TTL.
         Returns dict with 'report' and 'data' keys, or None on miss/expired.
         """
         with sqlite3.connect(str(self.db_path)) as conn:
@@ -69,7 +76,7 @@ class AnalysisCacheService:
         # Check TTL expiration
         created = datetime.fromisoformat(row["created_at"])
         age = (datetime.utcnow() - created).total_seconds()
-        if age > self._TTL_SECONDS:
+        if age > self._ttl_seconds(cache_key):
             return None  # expired
 
         return {
@@ -85,7 +92,7 @@ class AnalysisCacheService:
         trade_date: str | None = None,
     ) -> None:
         """
-        Upsert a cache entry. Expires after _TTL_SECONDS.
+        Upsert a cache entry. Expires according to the cache key type.
         """
         if trade_date is None:
             trade_date = date.today().isoformat()
@@ -95,7 +102,7 @@ class AnalysisCacheService:
 
         with sqlite3.connect(str(self.db_path)) as conn:
             # Clean up expired entries before writing
-            cutoff = datetime.utcnow().timestamp() - self._TTL_SECONDS
+            cutoff = datetime.utcnow().timestamp() - self._ANALYSIS_TTL_SECONDS
             conn.execute(
                 "DELETE FROM analysis_cache WHERE created_at < ?",
                 (datetime.utcfromtimestamp(cutoff).isoformat(),),
