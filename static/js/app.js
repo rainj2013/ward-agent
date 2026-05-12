@@ -85,53 +85,25 @@ function toggleCard(card) {
   if (footer) footer.style.display = isOpen ? 'none' : 'flex';
 }
 
-// Check if US market is open
-// US market hours (Beijing time, DST-aware):
-//   - 夏令时(EDT,UTC-4): 北京时间 21:30-04:00(次日) → UTC 13:30-20:00
-//   - 冬令时(EST,UTC-5): 北京时间 22:30-05:00(次日) → UTC 14:30-21:00
+function getNewYorkDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map(part => [part.type, part.value]));
+}
+
+// Check if US market is open by New York local time.
+// Regular session: Mon-Fri 09:30-16:00 America/New_York.
 function isMarketOpen() {
-  const now = new Date();
-  const day = now.getUTCDay(); // 0=Sun, 6=Sat
-  if (day === 0 || day === 6) return false;
+  const ny = getNewYorkDateParts();
+  if (ny.weekday === 'Sat' || ny.weekday === 'Sun') return false;
 
-  // 计算美国是否处于夏令时
-  // DST: 3月第二个周日 02:00 EST → 03:00 EDT
-  // 非DST: 11月第一个周日 02:00 EDT → 01:00 EST
-  function nthWeekdayOfMonth(year, month, weekday, n) {
-    const d = new Date(year, month, 1);
-    let count = 0;
-    while (true) {
-      if (d.getDay() === weekday) {
-        count++;
-        if (count === n) return d.getTime();
-      }
-      d.setDate(d.getDate() + 1);
-      if (d.getMonth() !== month) return -1;
-    }
-  }
-  const year = now.getFullYear();
-  const dstStart = nthWeekdayOfMonth(year, 2, 0, 2); // 3月第二个周日
-  const dstEnd = nthWeekdayOfMonth(year, 10, 0, 1);   // 11月第一个周日
-  const isDST = now.getTime() >= dstStart && now.getTime() < dstEnd;
-
-  // 北京时间 = UTC + 8
-  // 北京时间的小时数（处理跨天）
-  const utcHour = now.getUTCHours();
-  const beijingHour = utcHour + 8;
-  const normalizedHour = beijingHour >= 24 ? beijingHour - 24 : (beijingHour < 0 ? beijingHour + 24 : beijingHour);
-
-  if (isDST) {
-    // 夏令时: 北京 21:30开, 次日04:00闭
-    // 即 beijingHour 在 [21,24) 或 [0,4)
-    if (normalizedHour >= 21) return true;
-    if (normalizedHour < 4) return true;
-    return false;
-  } else {
-    // 冬令时: 北京 22:30开, 次日05:00闭
-    if (normalizedHour >= 22) return true;
-    if (normalizedHour < 5) return true;
-    return false;
-  }
+  const minutes = Number(ny.hour) * 60 + Number(ny.minute);
+  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
 }
 
 function updateMarketStatus() {
@@ -301,41 +273,53 @@ async function loadExtendedHours() {
   }
 }
 
+function renderReportStatus(content, message, jobId) {
+  const jobHtml = jobId ? `<div class="analysis-job-meta">Job: <code>${escapeHtml(jobId)}</code> · <a href="/runtime?job_id=${encodeURIComponent(jobId)}" target="_blank" rel="noopener">查看 Trace</a></div>` : '';
+  content.innerHTML = `<p class="hint">${escapeHtml(message)}</p>${jobHtml}`;
+}
+
+function renderMarketReport(content, report, result, jobId) {
+  let html = renderMarkdown(report);
+  const data = result && result.data ? result.data : {};
+  const s = data.sentiment;
+  if (s && s.score !== null && s.score !== undefined) {
+    const scoreColor = s.score >= 6 ? '#22c55e' : s.score >= 4 ? '#f59e0b' : '#ef4444';
+    const scoreLabel = s.score >= 6 ? '偏多' : s.score >= 4 ? '中性' : '偏空';
+    html += `<div class="sentiment-card">
+      <div class="sentiment-title">😈 市场情绪评分</div>
+      <div class="sentiment-score-row">
+        <span class="sentiment-score" style="color:${scoreColor}">${Number(s.score).toFixed(1)}/9</span>
+        <span class="sentiment-label" style="color:${scoreColor}">${scoreLabel}</span>
+      </div>
+      <div class="sentiment-interpretation">${escapeHtml(s.interpretation || '')}</div>
+    </div>`;
+  }
+  if (jobId) {
+    html += `<div class="analysis-job-meta">Job: <code>${escapeHtml(jobId)}</code> · <a href="/runtime?job_id=${encodeURIComponent(jobId)}" target="_blank" rel="noopener">查看 Trace</a></div>`;
+  }
+  renderStreamingHtml(content, html);
+}
+
 async function generateReport() {
   const btn = document.getElementById('generate-btn');
   const content = document.getElementById('report-content');
   btn.disabled = true;
   btn.textContent = '生成中...';
-  content.innerHTML = '<p class="hint">正在生成分析报告，请稍候...</p>';
+  renderReportStatus(content, '分析任务排队中...', null);
 
   try {
-    await streamTextResponse(
-      '/api/report/stream',
-      (report) => {
-        renderStreamingHtml(content, renderMarkdown(report));
+    await runAnalysisJob(
+      '/api/analysis-jobs/report',
+      (message, data) => {
+        const jobId = data && data.job ? data.job.id : null;
+        renderReportStatus(content, message, jobId);
       },
-      (report, data) => {
-        let html = renderMarkdown(report);
-        if (data.data && data.data.sentiment) {
-        const s = data.data.sentiment;
-        if (s.score !== null) {
-          const scoreColor = s.score >= 6 ? '#22c55e' : s.score >= 4 ? '#f59e0b' : '#ef4444';
-          const scoreLabel = s.score >= 6 ? '偏多' : s.score >= 4 ? '中性' : '偏空';
-          html += `<div class="sentiment-card">
-            <div class="sentiment-title">😈 市场情绪评分</div>
-            <div class="sentiment-score-row">
-              <span class="sentiment-score" style="color:${scoreColor}">${s.score.toFixed(1)}/9</span>
-              <span class="sentiment-label" style="color:${scoreColor}">${scoreLabel}</span>
-            </div>
-            <div class="sentiment-interpretation">${escapeHtml(s.interpretation || '')}</div>
-          </div>`;
-        }
-      }
-      renderStreamingHtml(content, html);
+      (report, result, job) => {
+        renderMarketReport(content, report, result, job && job.id);
       }
     );
   } catch (e) {
-    content.innerHTML = `<p class="hint" style="color:#ef4444">请求失败: ${e.message}</p>`;
+    content.innerHTML = `<p class="hint" style="color:#ef4444">请求失败: ${escapeHtml(e.message)}</p>`;
   } finally {
     btn.disabled = false;
     btn.textContent = '重新生成';
@@ -630,6 +614,8 @@ function formatAnalysisJobStatus(data) {
     message = '命中缓存，已复用现有分析';
   } else if (stage === 'fetching_data') {
     message = data.event === 'stage_end' ? '基础数据获取完成' : '正在获取行情、K线、新闻和财务数据';
+  } else if (stage === 'sentiment_analysis') {
+    message = data.event === 'llm_call_end' ? '市场情绪分析完成' : '正在生成市场情绪分析';
   } else if (stage === 'llm_generating') {
     message = data.event === 'llm_call_end' ? '模型分析报告生成完成' : '正在等待模型生成分析报告';
   } else if (stage === 'execute_handler') {

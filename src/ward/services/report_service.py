@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from time import perf_counter
 from typing import Any
 
 import yfinance as yf
@@ -13,6 +14,44 @@ from anthropic import Anthropic
 from ward.core.config import get_config
 from ward.services.db.analysis_cache_service import AnalysisCacheService
 from ward.services.nasdaq_service import MarketService
+
+
+def _zero_usage() -> dict[str, Any]:
+    return {
+        "provider": "anthropic-compatible",
+        "model": get_config().llm.model,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
+
+
+def _extract_llm_usage(response: Any) -> dict[str, Any]:
+    """Normalize Anthropic-compatible usage metadata for runtime stats."""
+    raw = getattr(response, "usage", None)
+    input_tokens = int(getattr(raw, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(raw, "output_tokens", 0) or 0)
+    cache_read = int(getattr(raw, "cache_read_input_tokens", 0) or 0)
+    cache_creation = int(getattr(raw, "cache_creation_input_tokens", 0) or 0)
+    total_input = input_tokens + cache_read + cache_creation
+    return {
+        "provider": "anthropic-compatible",
+        "model": get_config().llm.model,
+        "input_tokens": total_input,
+        "output_tokens": output_tokens,
+        "total_tokens": total_input + output_tokens,
+    }
+
+
+def _sum_usage(*items: dict[str, Any] | None) -> dict[str, Any]:
+    usage = _zero_usage()
+    for item in items:
+        if not item:
+            continue
+        usage["input_tokens"] += int(item.get("input_tokens", 0) or 0)
+        usage["output_tokens"] += int(item.get("output_tokens", 0) or 0)
+        usage["total_tokens"] += int(item.get("total_tokens", 0) or 0)
+    return usage
 
 
 class ReportService:
@@ -112,15 +151,30 @@ class ReportService:
         all_news.sort(key=lambda x: x.get("time", ""), reverse=True)
         return all_news[:limit]
 
-    def _analyze_sentiment(self, news_items: list[dict]) -> dict[str, Any]:
+    def _analyze_sentiment(self, news_items: list[dict], trace=None) -> dict[str, Any]:
         """Use LLM to analyze market sentiment from news titles."""
         if not news_items:
-            return {"score": None, "interpretation": "无新闻数据", "topics": [], "raw": ""}
+            if trace:
+                trace("stage_end", "没有可用新闻，跳过情绪分析", "sentiment_analysis", {"news_count": 0})
+            return {"score": None, "interpretation": "无新闻数据", "topics": [], "raw": "", "usage": _zero_usage()}
 
         titles = "\n".join(f"- [{item['symbol']}] {item['title']}" for item in news_items)
         prompt = self.SENTIMENT_PROMPT.format(news_titles=titles)
 
         try:
+            llm_started = perf_counter()
+            if trace:
+                trace(
+                    "llm_call_start",
+                    "正在等待模型生成市场情绪分析",
+                    "sentiment_analysis",
+                    {
+                        "model": self.config.llm.model,
+                        "max_tokens": 3000,
+                        "system": "你是一个客观理性的金融市场情绪分析师。",
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                )
             response = self.client.messages.create(
                 model=self.config.llm.model,
                 max_tokens=3000,
@@ -139,31 +193,56 @@ class ReportService:
                     m = re.search(r'([0-9.]+)\s*/\s*9', line)
                     if m:
                         score = float(m.group(1))
+            usage = _extract_llm_usage(response)
+            if trace:
+                trace(
+                    "llm_call_end",
+                    "市场情绪分析完成",
+                    "sentiment_analysis",
+                    {"usage": usage, "response_text": text},
+                    int((perf_counter() - llm_started) * 1000),
+                )
             return {
                 "score": score,
                 "interpretation": text,
                 "topics": [],
                 "raw": text,
                 "news_count": len(news_items),
+                "usage": usage,
             }
         except Exception as e:
-            return {"score": None, "interpretation": f"情绪分析失败: {e}", "topics": [], "raw": ""}
+            if trace:
+                trace("llm_call_error", "市场情绪分析失败", "sentiment_analysis", {"error": str(e)})
+            return {"score": None, "interpretation": f"情绪分析失败: {e}", "topics": [], "raw": "", "usage": _zero_usage()}
 
-    def generate_market_report(self) -> dict[str, Any]:
+    def generate_market_report(self, trace=None) -> dict[str, Any]:
         """Generate today's Nasdaq market report with news + sentiment."""
-        cache_key = "market:report"
+        cache_key = f"market:report:model:{get_config().llm.model}"
         cached = self._cache.get(cache_key)
         if cached:
+            if trace:
+                trace("cache_hit", "命中缓存，已复用现有市场报告", "cache_hit", {"cache_key": cache_key})
             return {"ok": True, "report": cached["report"], "data": cached["data"], "cached": True}
+        if trace:
+            trace("cache_miss", "缓存未命中，准备获取市场数据和新闻", "fetching_data", {"cache_key": cache_key})
 
         # 1. Market data
+        fetch_started = perf_counter()
         overview = self.ns.get_market_overview()
 
         # 2. Fetch news
         news = self._fetch_news()
+        if trace:
+            trace(
+                "stage_end",
+                "市场指数和新闻获取完成",
+                "fetching_data",
+                {"overview_ok": overview.get("ok", False), "news_count": len(news)},
+                int((perf_counter() - fetch_started) * 1000),
+            )
 
         # 3. Sentiment analysis
-        sentiment = self._analyze_sentiment(news)
+        sentiment = self._analyze_sentiment(news, trace=trace)
 
         # 4. Build data summary for LLM
         context = {
@@ -195,6 +274,19 @@ class ReportService:
 5. 简短的投资思考"""
 
         try:
+            llm_started = perf_counter()
+            if trace:
+                trace(
+                    "llm_call_start",
+                    "正在等待模型生成市场分析报告",
+                    "llm_generating",
+                    {
+                        "model": self.config.llm.model,
+                        "max_tokens": 5000,
+                        "system": self.SYSTEM_PROMPT,
+                        "messages": [{"role": "user", "content": user_prompt}],
+                    },
+                )
             response = self.client.messages.create(
                 model=self.config.llm.model,
                 max_tokens=5000,
@@ -205,12 +297,25 @@ class ReportService:
                 block.text if hasattr(block, "text") else ""
                 for block in response.content
             )
+            report_usage = _extract_llm_usage(response)
+            usage = _sum_usage(sentiment.get("usage"), report_usage)
+            if trace:
+                trace(
+                    "llm_call_end",
+                    "市场分析报告生成完成",
+                    "llm_generating",
+                    {"usage": report_usage, "response_text": text},
+                    int((perf_counter() - llm_started) * 1000),
+                )
             return {
                 "ok": True,
                 "report": text,
                 "data": context,
+                "usage": usage,
             }
         except Exception as e:
+            if trace:
+                trace("llm_call_error", "市场分析报告生成失败", "llm_generating", {"error": str(e)})
             return {
                 "ok": False,
                 "error": str(e),
@@ -222,7 +327,7 @@ class ReportService:
 
     def generate_market_report_stream(self):
         """Stream today's Nasdaq market report from the LLM."""
-        cache_key = "market:report"
+        cache_key = f"market:report:model:{get_config().llm.model}"
         cached = self._cache.get(cache_key)
         if cached:
             yield {"ok": True, "chunk": cached["report"], "cached": True}

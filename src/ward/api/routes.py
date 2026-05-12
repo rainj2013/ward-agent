@@ -44,6 +44,7 @@ is_ = IndexService()
 ajs = AnalysisJobService(concurrency=1)
 ajs.register_handler("stock_analysis", lambda payload: ss.generate_analysis(payload["symbol"], trace=payload.get("_trace")))
 ajs.register_handler("index_analysis", lambda payload: is_.generate_analysis(payload["prefix"], trace=payload.get("_trace")))
+ajs.register_handler("market_report", lambda payload: rs.generate_market_report(trace=payload.get("_trace")))
 
 _static_dir = Path(__file__).parent.parent.parent.parent / "static"
 
@@ -257,6 +258,16 @@ async def create_stock_analysis_job(symbol: str):
     """Create a queued AI analysis job for a stock."""
     try:
         job = await ajs.create_job("stock_analysis", {"symbol": symbol.upper()})
+        return AnalysisJobCreateResponse(ok=True, job=job)
+    except Exception as exc:
+        return AnalysisJobCreateResponse(ok=False, error=str(exc))
+
+
+@router.post("/api/analysis-jobs/report", response_model=AnalysisJobCreateResponse)
+async def create_market_report_job():
+    """Create a queued AI market report job."""
+    try:
+        job = await ajs.create_job("market_report", {})
         return AnalysisJobCreateResponse(ok=True, job=job)
     except Exception as exc:
         return AnalysisJobCreateResponse(ok=False, error=str(exc))
