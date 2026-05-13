@@ -3,19 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ward Runtime</title>
+  <title>Ward 运行中心</title>
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
   <div class="container runtime-page">
     <header>
-      <h1>Ward Runtime</h1>
-      <div class="runtime-nav">
-        <a href="/">← 返回 Ward</a>
+      <h1><span class="brand-mark"></span>Ward</h1>
+      <nav class="top-nav" aria-label="主导航">
+        <a href="/">市场概览</a>
+        <a href="/#stock-section">个股分析</a>
+        <a href="/#stock-section">自选列表</a>
+        <a href="/#report-section">市场资讯</a>
+        <a href="/runtime" class="active">运行中心</a>
+      </nav>
+      <div class="theme-switcher" aria-label="主题切换">
+        <button type="button" data-theme="graphite" title="石墨琥珀"></button>
+        <button type="button" data-theme="forest" title="酒红金"></button>
+        <button type="button" data-theme="copper" title="暖灰铜色"></button>
       </div>
     </header>
 
-    <div class="runtime-subtitle">任务队列 · Trace · 成本统计</div>
+    <div class="runtime-subtitle">运行中心 · 任务队列 · Trace · 成本统计</div>
 
     <section class="runtime-section">
       <div class="runtime-header">
@@ -46,6 +55,6 @@
     </section>
   </div>
 
-  <script src="/static/js/app.js?v=11"></script>
+  <script src="/static/js/app.js?v=16"></script>
 </body>
 </html>

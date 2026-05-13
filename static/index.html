@@ -11,10 +11,25 @@
 <body>
   <div class="container">
     <header>
-      <h1>Ward</h1>
+      <h1><span class="brand-mark"></span>Ward</h1>
+      <nav class="top-nav" aria-label="主导航">
+        <a href="#market-cards" class="active">市场概览</a>
+        <a href="#stock-section">个股分析</a>
+        <a href="#stock-section">自选列表</a>
+        <a href="#report-section">市场资讯</a>
+        <a href="/runtime">运行中心</a>
+      </nav>
+      <div class="theme-switcher" aria-label="主题切换">
+        <button type="button" data-theme="graphite" title="石墨琥珀"></button>
+        <button type="button" data-theme="forest" title="酒红金"></button>
+        <button type="button" data-theme="copper" title="暖灰铜色"></button>
+      </div>
       <div class="market-status" id="market-status">
         <span class="status-dot" id="status-dot"></span>
-        <span id="status-text">检测中...</span>
+        <span class="status-copy">
+          <strong id="status-text">检测中...</strong>
+          <small>US Market</small>
+        </span>
         <span id="refresh-countdown"></span>
       </div>
     </header>
@@ -30,6 +45,7 @@
           </div>
           <span class="loading">加载中...</span>
         </div>
+        <div class="mini-sparkline sparkline-green" aria-hidden="true"></div>
         <div class="card-body" style="display:none">
           <div class="price" id="ixic-price">--</div>
           <div class="change" id="ixic-change">--</div>
@@ -56,6 +72,7 @@
           </div>
           <span class="loading">加载中...</span>
         </div>
+        <div class="mini-sparkline sparkline-red" aria-hidden="true"></div>
         <div class="card-body" style="display:none">
           <div class="price" id="dji-price">--</div>
           <div class="change" id="dji-change">--</div>
@@ -82,6 +99,7 @@
           </div>
           <span class="loading">加载中...</span>
         </div>
+        <div class="mini-sparkline sparkline-green" aria-hidden="true"></div>
         <div class="card-body" style="display:none">
           <div class="price" id="spx-price">--</div>
           <div class="change" id="spx-change">--</div>
@@ -108,6 +126,7 @@
           </div>
           <span class="loading">加载中...</span>
         </div>
+        <div class="mini-sparkline sparkline-gold" aria-hidden="true"></div>
         <div class="card-body" style="display:none">
           <div class="price" id="gold-price">--</div>
           <div class="change" id="gold-change">--</div>
@@ -203,7 +222,7 @@
     </section>
 
     <!-- Stock Search Section -->
-    <section class="stock-section">
+    <section class="stock-section" id="stock-section">
       <h2>个股查询</h2>
       <div class="stock-search-row">
         <input type="text" id="stock-search-input" placeholder="输入股票代码或名称，如 AAPL、NVDA" onkeydown="if(event.key==='Enter')searchStock()" />
@@ -213,8 +232,12 @@
     </section>
 
     <!-- AI Report Section -->
-    <section class="report-section">
-      <h2>市场分析报告</h2>
+    <section class="report-section" id="report-section">
+      <canvas id="report-illustration" class="report-illustration" width="160" height="140" aria-label="市场分析报告图示"></canvas>
+      <div class="report-heading">
+        <h2>市场分析报告</h2>
+        <p>汇总指数、黄金与个股数据，生成结构化市场洞察。</p>
+      </div>
       <button id="generate-btn" onclick="generateReport()">生成报告</button>
       <div id="report-content" class="report-content">
         <p class="hint">基于今日市场数据生成分析报告</p>
@@ -241,6 +264,6 @@
     </footer>
   </div>
 
-  <script src="/static/js/app.js?v=14"></script>
+  <script src="/static/js/app.js?v=16"></script>
 </body>
 </html>

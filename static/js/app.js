@@ -19,6 +19,155 @@ const _stockAnalysisCache = {}; // symbol -> string (AI analysis text)
 let _indexAnalysisCache = {};   // prefix -> string (index AI analysis text)
 let _runtimeStatsRange = '1d';
 
+const THEME_STORAGE_KEY = 'ward_theme';
+const DEFAULT_THEME = 'graphite';
+
+function applyTheme(theme) {
+  const next = ['graphite', 'forest', 'copper'].includes(theme) ? theme : DEFAULT_THEME;
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem(THEME_STORAGE_KEY, next);
+  document.querySelectorAll('.theme-switcher button').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.theme === next);
+  });
+  requestAnimationFrame(drawReportIllustration);
+}
+
+function initThemeSwitcher() {
+  applyTheme(localStorage.getItem(THEME_STORAGE_KEY) || DEFAULT_THEME);
+  document.querySelectorAll('.theme-switcher button').forEach(btn => {
+    btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
+  });
+}
+
+function cssVar(name, fallback) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+function drawReportIllustration() {
+  const canvas = document.getElementById('report-illustration');
+  if (!canvas) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = rect.width;
+  const h = rect.height;
+  const accent = cssVar('--accent', '#d9a441');
+  const accent2 = cssVar('--accent-2', '#956d24');
+  const text = cssVar('--text', '#ebe6dc');
+  const muted = cssVar('--muted', '#9d978d');
+  const panel = cssVar('--panel-3', 'rgba(16,18,22,0.82)');
+  const up = cssVar('--up', '#ff6b57');
+  const down = cssVar('--down', '#4fd081');
+
+  ctx.clearRect(0, 0, w, h);
+
+  const bg = ctx.createRadialGradient(w * 0.5, h * 0.34, 8, w * 0.5, h * 0.5, w * 0.68);
+  bg.addColorStop(0, `${accent}55`);
+  bg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.globalAlpha = 0.22;
+  ctx.strokeStyle = muted;
+  ctx.lineWidth = 1;
+  for (let x = 18; x < w; x += 18) {
+    ctx.beginPath();
+    ctx.moveTo(x, 18);
+    ctx.lineTo(x, h - 18);
+    ctx.stroke();
+  }
+  for (let y = 22; y < h; y += 18) {
+    ctx.beginPath();
+    ctx.moveTo(16, y);
+    ctx.lineTo(w - 16, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  roundRect(ctx, 34, 20, 62, 82, 10);
+  const docGrad = ctx.createLinearGradient(34, 20, 96, 102);
+  docGrad.addColorStop(0, 'rgba(255,255,255,0.16)');
+  docGrad.addColorStop(1, panel);
+  ctx.fillStyle = docGrad;
+  ctx.fill();
+  ctx.strokeStyle = `${accent}66`;
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+
+  ctx.strokeStyle = `${text}88`;
+  ctx.lineWidth = 2;
+  [['', 48, 40, 78], ['', 48, 54, 84], ['', 48, 68, 70]].forEach(([, x1, y, x2]) => {
+    ctx.beginPath();
+    ctx.moveTo(x1, y);
+    ctx.lineTo(x2, y);
+    ctx.stroke();
+  });
+
+  const bars = [
+    [47, 86, 8, up],
+    [58, 78, 16, down],
+    [69, 82, 12, up],
+    [80, 70, 24, accent],
+  ];
+  bars.forEach(([x, y, bh, color]) => {
+    roundRect(ctx, x, y, 6, bh, 3);
+    ctx.fillStyle = color;
+    ctx.fill();
+  });
+
+  ctx.beginPath();
+  ctx.moveTo(70, 83);
+  ctx.bezierCurveTo(82, 68, 93, 72, 104, 54);
+  ctx.bezierCurveTo(111, 42, 119, 46, 128, 31);
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.shadowColor = accent;
+  ctx.shadowBlur = 12;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  [[104, 54], [128, 31]].forEach(([x, y]) => {
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = accent;
+    ctx.fill();
+    ctx.strokeStyle = `${text}aa`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+
+  roundRect(ctx, 87, 77, 42, 28, 8);
+  ctx.fillStyle = `${accent2}55`;
+  ctx.fill();
+  ctx.strokeStyle = `${accent}77`;
+  ctx.stroke();
+  ctx.fillStyle = text;
+  ctx.font = '700 12px Inter, sans-serif';
+  ctx.fillText('AI', 101, 96);
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
 function fmt(num) {
   if (num === null || num === undefined) return '--';
   return typeof num === 'number'
@@ -1295,6 +1444,9 @@ function handleAnalyzeAction(symbol, name, btn) {
   }
 
 document.addEventListener('DOMContentLoaded', () => {
+  initThemeSwitcher();
+  drawReportIllustration();
+  window.addEventListener('resize', drawReportIllustration);
   if (document.getElementById('market-cards')) {
     loadMarketData();
     loadExtendedHours();
@@ -1404,21 +1556,31 @@ async function loadStockQuote(symbol, name, card) {
       volume: d.volume,
     };
 
-    card.innerHTML = `<div class="stock-result-header">
-      <span class="stock-result-symbol">${symbol}</span>
-      <span class="stock-result-name">${name}</span>
+    card.innerHTML = `<div class="stock-result-top">
+      <div class="stock-logo">${symbol.slice(0, 1)}</div>
+      <div>
+        <div class="stock-result-header">
+          <span class="stock-result-symbol">${symbol}</span>
+          <span class="stock-result-name">${name}</span>
+        </div>
+        <div class="stock-tags"><span>美股</span><span>实时行情</span></div>
+      </div>
     </div>
-    <div class="stock-result-price">${fmt(d.price)}</div>
-    <div class="stock-result-change ${changeClass}">${changeSign}${d.change.toFixed(2)} (${changeSign}${d.change_pct.toFixed(2)}%)</div>
-    <div class="stock-result-meta">
-      <span>开盘 ${fmt(d.open)}</span>
-      <span>最高 ${fmt(d.high)}</span>
-      <span>最低 ${fmt(d.low)}</span>
-      <span>成交量 ${fmt(d.volume)}</span>
+    <div class="stock-result-main">
+      <div>
+        <div class="stock-result-price">${fmt(d.price)}</div>
+        <div class="stock-result-change ${changeClass}">${changeSign}${d.change.toFixed(2)} (${changeSign}${d.change_pct.toFixed(2)}%)</div>
+      </div>
+      <div class="stock-result-meta">
+        <span><small>开盘</small>${fmt(d.open)}</span>
+        <span><small>最高</small>${fmt(d.high)}</span>
+        <span><small>最低</small>${fmt(d.low)}</span>
+        <span><small>成交量</small>${fmt(d.volume)}</span>
+      </div>
     </div>
     <div class="stock-result-actions">
+      <button class="stock-chart-btn active" data-action="chart" data-symbol="${symbol}" data-name="${name}">K线</button>
       <button class="stock-analyze-btn" data-action="analyze" data-symbol="${symbol}" data-name="${name}">分析</button>
-      <button class="stock-chart-btn" data-action="chart" data-symbol="${symbol}" data-name="${name}">K线</button>
     </div>
     <div id="chart-${symbol}" class="stock-chart-container" style="display:none"></div>
     <div id="analysis-${symbol}" class="stock-analysis-card" style="display:none"></div>`;
@@ -1436,6 +1598,9 @@ async function loadStockQuote(symbol, name, card) {
       e.stopPropagation();
       handleChartAction(symbol, name, card.querySelector('.stock-chart-btn'));
     };
+    if (!chartVisible) {
+      requestAnimationFrame(() => handleChartAction(symbol, name, card.querySelector('.stock-chart-btn')));
+    }
 
     // Restore chart/analysis state after innerHTML rebuild
     const newChartEl = document.getElementById('chart-' + symbol);
