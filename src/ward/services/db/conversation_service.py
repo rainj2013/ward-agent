@@ -52,10 +52,10 @@ class ConversationService:
             conn.commit()
             return cur.lastrowid
 
-    def add_message(self, conversation_id: int, role: str, content: str) -> None:
+    def add_message(self, conversation_id: int, role: str, content: str) -> int:
         now = datetime.utcnow().isoformat()
         with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(
+            cur = conn.execute(
                 "INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                 (conversation_id, role, content, now),
             )
@@ -64,6 +64,26 @@ class ConversationService:
                 (now, conversation_id),
             )
             conn.commit()
+            return cur.lastrowid
+
+    def update_message(self, conversation_id: int, message_id: int, role: str, content: str) -> bool:
+        now = datetime.utcnow().isoformat()
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cur = conn.execute(
+                """
+                UPDATE messages
+                SET content = ?
+                WHERE id = ? AND conversation_id = ? AND role = ?
+                """,
+                (content, message_id, conversation_id, role),
+            )
+            if cur.rowcount:
+                conn.execute(
+                    "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                    (now, conversation_id),
+                )
+            conn.commit()
+            return cur.rowcount > 0
 
     def get_messages(self, conversation_id: int, limit: int | None = None) -> list[dict[str, Any]]:
         with sqlite3.connect(str(self.db_path)) as conn:
@@ -92,15 +112,18 @@ class ConversationService:
                     (conversation_id, limit + 1),
                 ).fetchall()
             else:
-                # Load more: get older messages (ASC, older than before_id)
+                # Load the next page immediately older than before_id, then
+                # reverse to ASC so the UI can prepend chronological chunks.
                 rows = conn.execute(
-                    "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? AND id < ? ORDER BY created_at ASC, id ASC LIMIT ?",
+                    "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? AND id < ? ORDER BY created_at DESC, id DESC LIMIT ?",
                     (conversation_id, before_id, limit + 1),
                 ).fetchall()
             has_more = len(rows) > limit
             if has_more:
                 rows = rows[:limit]
-            next_before_id = rows[-1]["id"] if rows and has_more else None
+            if before_id is not None:
+                rows = list(reversed(rows))
+            next_before_id = (rows[0]["id"] if before_id is not None else rows[-1]["id"]) if rows and has_more else None
             return [dict(row) for row in rows], has_more, next_before_id
 
     def list_conversations(self, limit: int = 20) -> list[dict[str, Any]]:

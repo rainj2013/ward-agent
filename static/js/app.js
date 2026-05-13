@@ -334,6 +334,7 @@ let _historyLoaded = false;
 let _toolInvokeMap = new Map(); // tool_call_id -> div，正在查询的工具调用
 let _lastThinking = null;       // 当前思考指示器 DOM 节点
 let _sseBuffer = '';            // SSE 事件跨 TCP 分包的拼接缓冲
+let _chatAbortCtrl = null;
 
 function parseSseEvent(rawEvent) {
   const dataLines = rawEvent.replace(/\r\n/g, '\n').split('\n')
@@ -399,8 +400,8 @@ async function streamTextResponse(url, onChunk, onDone) {
   }
 }
 
-async function runAnalysisJob(createUrl, onStatus, onDone) {
-  const createResp = await fetch(createUrl, { method: 'POST' });
+async function runAnalysisJob(createUrl, onStatus, onDone, createOptions = {}) {
+  const createResp = await fetch(createUrl, { method: 'POST', ...createOptions });
   if (!createResp.ok) {
     throw new Error(`HTTP ${createResp.status}`);
   }
@@ -452,6 +453,59 @@ async function runAnalysisJob(createUrl, onStatus, onDone) {
   throw new Error('分析任务连接中断');
 }
 
+async function generateStockComparison() {
+  const symbolsInput = document.getElementById('compare-symbols-input');
+  const objectiveInput = document.getElementById('compare-objective-input');
+  const btn = document.getElementById('compare-generate-btn');
+  const content = document.getElementById('compare-content');
+  const symbols = symbolsInput.value
+    .split(/[,\s]+/)
+    .map(item => item.trim().toUpperCase())
+    .filter(Boolean)
+    .filter((item, idx, arr) => arr.indexOf(item) === idx);
+
+  if (symbols.length < 2) {
+    content.innerHTML = '<p class="hint" style="color:#ef4444">请输入至少 2 个股票代码。</p>';
+    return;
+  }
+  if (symbols.length > 6) {
+    content.innerHTML = '<p class="hint" style="color:#ef4444">单次最多支持 6 个股票代码。</p>';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = '对比中...';
+  renderReportStatus(content, 'Team 任务排队中...', null);
+
+  try {
+    await runAnalysisJob(
+      '/api/analysis-jobs/compare',
+      (message, data) => {
+        const jobId = data && data.job ? data.job.id : null;
+        renderReportStatus(content, message, jobId);
+      },
+      (report, result, job) => {
+        const jobHtml = job && job.id
+          ? `<div class="analysis-job-meta">Job: <code>${escapeHtml(job.id)}</code> · <a href="/runtime?job_id=${encodeURIComponent(job.id)}" target="_blank" rel="noopener">查看 Trace</a></div>`
+          : '';
+        renderStreamingHtml(content, `${renderMarkdown(report)}${jobHtml}`);
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbols,
+          objective: objectiveInput.value.trim() || null,
+        }),
+      }
+    );
+  } catch (e) {
+    content.innerHTML = `<p class="hint" style="color:#ef4444">请求失败: ${escapeHtml(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '重新对比';
+  }
+}
+
 function rememberRuntimeJob(jobId) {
   if (!jobId) return;
   const input = document.getElementById('runtime-job-input');
@@ -466,6 +520,71 @@ function renderAnalysisStatus(container, title, message, jobId) {
 function renderAnalysisReport(container, title, report, jobId) {
   const jobHtml = jobId ? `<div class="analysis-job-meta">Job: <code>${escapeHtml(jobId)}</code> · <a href="/runtime?job_id=${encodeURIComponent(jobId)}" target="_blank" rel="noopener">查看 Trace</a></div>` : '';
   renderStreamingHtml(container, `${title}<div class="stock-analysis-content">${renderMarkdown(report)}${jobHtml}</div>`);
+}
+
+function renderChatJobCard(job) {
+  if (!job || !job.id) return '';
+  const symbols = Array.isArray(job.symbols) ? job.symbols.join(' / ') : '';
+  const typeLabel = job.type === 'stock_comparison' ? '多股对比 Team' : (job.type || '后台任务');
+  const traceUrl = job.trace_url || `/runtime?job_id=${encodeURIComponent(job.id)}`;
+  return `<div class="chat-job-card" id="chat-job-${escapeHtml(job.id)}">
+    <div class="chat-job-title">${escapeHtml(typeLabel)}</div>
+    ${symbols ? `<div class="chat-job-symbols">${escapeHtml(symbols)}</div>` : ''}
+    <div class="chat-job-meta">Job: <code>${escapeHtml(job.id)}</code></div>
+    <div class="chat-job-status">任务运行中，完成后会自动回填结果。</div>
+    <a href="${escapeHtml(traceUrl)}" target="_blank" rel="noopener">查看 Team Trace</a>
+  </div>`;
+}
+
+function persistAssistantMessage(conversationId, messageId, content) {
+  if (!conversationId || !messageId || !content) return;
+  fetch(`/api/chat/${conversationId}/messages/${messageId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  }).catch(() => {});
+}
+
+function pollChatJobResult(job, replyContent, getIntroText, options = {}) {
+  if (!job || !job.id) return;
+  let attempts = 0;
+  const timer = setInterval(async () => {
+    attempts += 1;
+    try {
+      const resp = await fetch(`/api/analysis-jobs/${encodeURIComponent(job.id)}`);
+      const data = await resp.json();
+      if (!data.ok || !data.job) throw new Error(data.error || '任务状态获取失败');
+      const snapshot = data.job;
+      const card = document.getElementById(`chat-job-${job.id}`);
+      if (card) {
+        const status = card.querySelector('.chat-job-status');
+        if (status) status.textContent = snapshot.stage_message || snapshot.status || '任务运行中';
+      }
+      if (snapshot.status === 'succeeded' && snapshot.result) {
+        clearInterval(timer);
+        const intro = getIntroText ? getIntroText() : '';
+        const report = snapshot.result.report || '';
+        const persistedContent = `${intro}\n\n${report}`.trim();
+        const jobHtml = renderChatJobCard({ ...job, trace_url: `/runtime?job_id=${job.id}` }).replace(
+          '任务运行中，完成后会自动回填结果。',
+          '任务已完成。'
+        );
+        replyContent.innerHTML = `${renderMarkdown(intro)}${jobHtml}<div class="chat-job-result">${renderMarkdown(report)}</div>`;
+        persistAssistantMessage(options.conversationId, options.messageId, persistedContent);
+        replyContent.closest('.chat-messages').scrollTop = replyContent.closest('.chat-messages').scrollHeight;
+      } else if (snapshot.status === 'failed') {
+        clearInterval(timer);
+        if (card) {
+          card.classList.add('error');
+          const status = card.querySelector('.chat-job-status');
+          if (status) status.textContent = snapshot.error || '任务失败';
+        }
+      }
+      if (attempts >= 180) clearInterval(timer);
+    } catch (_) {
+      if (attempts >= 180) clearInterval(timer);
+    }
+  }, 1000);
 }
 
 async function loadRuntimeStats(range = _runtimeStatsRange, btn = null) {
@@ -554,6 +673,7 @@ function renderRuntimeTrace(job, events) {
     </div>
   `).join('');
 
+  const teamOverview = renderRuntimeTeamOverview(job, events);
   const eventHtml = events.map(ev => {
     const data = ev.data ? JSON.stringify(ev.data, null, 2) : '';
     return `
@@ -569,8 +689,60 @@ function renderRuntimeTrace(job, events) {
 
   container.innerHTML = `
     <div class="runtime-trace-summary">${summary}</div>
+    ${teamOverview}
     ${eventHtml || '<div class="runtime-muted">暂无事件。</div>'}
   `;
+}
+
+function renderRuntimeTeamOverview(job, events) {
+  if (!job || job.type !== 'stock_comparison') return '';
+
+  const plan = events.find(ev => ev.event === 'leader_plan');
+  const workers = events.filter(ev => ev.event === 'worker_done');
+  const synthesisStart = events.find(ev => ev.stage === 'leader_synthesis' && ev.event === 'llm_call_start');
+  const synthesisEnd = events.find(ev => ev.stage === 'leader_synthesis' && ev.event === 'llm_call_end');
+  const verification = events.find(ev => ev.event === 'verification_passed' || ev.event === 'verification_failed');
+  const symbols = plan && plan.data && plan.data.symbols
+    ? plan.data.symbols.join(' / ')
+    : ((job.payload && job.payload.symbols) || []).join(' / ');
+
+  const workerHtml = workers.length ? workers.map(ev => {
+    const data = ev.data || {};
+    const ok = data.ok !== false;
+    const symbol = data.symbol || '--';
+    const trend = data.trend && data.trend.status ? data.trend.status : '--';
+    const klineCount = data.data_quality && data.data_quality.kline_count !== undefined ? data.data_quality.kline_count : '--';
+    return `<div class="runtime-team-worker ${ok ? 'ok' : 'error'}">
+      <div class="runtime-team-worker-symbol">${escapeHtml(symbol)}</div>
+      <div class="runtime-team-worker-meta">${ok ? '完成' : '失败'} · 趋势 ${escapeHtml(String(trend))} · K线 ${escapeHtml(String(klineCount))}</div>
+    </div>`;
+  }).join('') : '<div class="runtime-muted">Worker 尚未完成。</div>';
+
+  const verifierData = verification && verification.data ? verification.data : null;
+  const verifierPassed = verifierData ? verifierData.passed : null;
+  const warnings = verifierData && verifierData.warnings ? verifierData.warnings : [];
+  const errors = verifierData && verifierData.errors ? verifierData.errors : [];
+
+  return `<div class="runtime-team">
+    <div class="runtime-team-title">Team Overview${symbols ? ` · ${escapeHtml(symbols)}` : ''}</div>
+    <div class="runtime-team-grid">
+      <div class="runtime-team-card">
+        <div class="runtime-team-card-label">Leader</div>
+        <div class="runtime-team-card-value">${plan ? '计划已生成' : '等待计划'}</div>
+        <div class="runtime-team-card-note">${synthesisEnd ? '聚合完成' : synthesisStart ? '正在聚合' : '等待 Worker'}</div>
+      </div>
+      <div class="runtime-team-card runtime-team-workers-card">
+        <div class="runtime-team-card-label">Workers</div>
+        <div class="runtime-team-workers">${workerHtml}</div>
+      </div>
+      <div class="runtime-team-card ${verifierPassed === false ? 'error' : verifierPassed === true ? 'ok' : ''}">
+        <div class="runtime-team-card-label">Verifier</div>
+        <div class="runtime-team-card-value">${verifierPassed === true ? '验证通过' : verifierPassed === false ? '验证失败' : '等待验证'}</div>
+        ${errors.length ? `<div class="runtime-team-card-note error">${escapeHtml(errors.join('；'))}</div>` : ''}
+        ${warnings.length ? `<div class="runtime-team-card-note">${escapeHtml(warnings.join('；'))}</div>` : ''}
+      </div>
+    </div>
+  </div>`;
 }
 
 function refreshRuntimePanel() {
@@ -618,6 +790,14 @@ function formatAnalysisJobStatus(data) {
     message = data.event === 'llm_call_end' ? '市场情绪分析完成' : '正在生成市场情绪分析';
   } else if (stage === 'llm_generating') {
     message = data.event === 'llm_call_end' ? '模型分析报告生成完成' : '正在等待模型生成分析报告';
+  } else if (stage === 'leader_plan') {
+    message = 'Leader 已生成任务计划';
+  } else if (stage === 'worker_fetch') {
+    message = data.event === 'stage_end' ? '所有 Worker 摘要已完成' : 'Worker 正在获取并整理标的数据';
+  } else if (stage === 'leader_synthesis') {
+    message = data.event === 'llm_call_end' ? 'Leader 对比报告生成完成' : 'Leader 正在聚合 Worker 摘要';
+  } else if (stage === 'verifying') {
+    message = data.event === 'verification_passed' ? 'Verifier 验证通过' : data.event === 'verification_failed' ? 'Verifier 验证失败' : 'Verifier 正在检查报告';
   } else if (stage === 'execute_handler') {
     message = '正在执行分析任务';
   } else if (stage === 'succeeded' && eventData.cache_hit) {
@@ -736,8 +916,8 @@ async function sendChat() {
   const isCancelling = btn.dataset.thinking === '1';
   if (isCancelling) {
     btn.dataset.thinking = '0';
-    abortCtrl.abort();
-    fetch(`/api/chat/${convId || conversationId}/cancel`, { method: 'POST' }).catch(() => {});
+    if (_chatAbortCtrl) _chatAbortCtrl.abort();
+    fetch(`/api/chat/${conversationId || 0}/cancel`, { method: 'POST' }).catch(() => {});
     return;
   }
   btn.dataset.thinking = '1';
@@ -745,6 +925,7 @@ async function sendChat() {
 
   // AbortController for cancelling the in-flight request
   const abortCtrl = new AbortController();
+  _chatAbortCtrl = abortCtrl;
   const abortSignal = abortCtrl.signal;
 
   const container = document.getElementById('chat-messages');
@@ -860,6 +1041,8 @@ async function sendChat() {
     const decoder = new TextDecoder();
     let done = false;
     let fullReply = '';
+    let activeJob = null;
+    let assistantMessageId = null;
     let convId = conversationId;
     const reqStart = Date.now();
 
@@ -928,13 +1111,26 @@ async function sendChat() {
           break;
         }
         convId = data.conversation_id;
+        if (data.assistant_message_id) {
+          assistantMessageId = data.assistant_message_id;
+        }
+        if (data.job) {
+          activeJob = data.job;
+          if (_lastThinking) {
+            _lastThinking.remove();
+            _lastThinking = null;
+          }
+          replyContent.insertAdjacentHTML('beforeend', renderChatJobCard(data.job));
+          container.scrollTop = container.scrollHeight;
+        }
         if (data.chunk) {
           if (_lastThinking && !_lastThinking.querySelector('.think-text').textContent.trim()) {
             _lastThinking.remove();
             _lastThinking = null;
           }
           fullReply += data.chunk;
-          replyContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
+          replyContent.innerHTML = (typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply))
+            + (activeJob ? renderChatJobCard(activeJob) : '');
           container.scrollTop = container.scrollHeight;
         }
         if (data.done) {
@@ -947,7 +1143,8 @@ async function sendChat() {
             cancelNotice.textContent = '⚠️ 已取消';
             answerDiv.insertAdjacentElement('afterbegin', cancelNotice);
           } else {
-            replyContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply);
+            replyContent.innerHTML = (typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply))
+              + (activeJob ? renderChatJobCard(activeJob) : '');
           }
           conversationId = convId;
           localStorage.setItem('ward_conversation_id', convId);
@@ -957,6 +1154,12 @@ async function sendChat() {
           if (data.next_before_id !== undefined) _nextBeforeId = data.next_before_id;
           const loadMoreBtn = document.getElementById('chat-load-more-btn');
           if (loadMoreBtn) loadMoreBtn.style.display = _hasMoreMessages ? 'block' : 'none';
+          if (activeJob) {
+            pollChatJobResult(activeJob, replyContent, () => fullReply, {
+              conversationId: convId,
+              messageId: assistantMessageId,
+            });
+          }
           _toolInvokeMap.clear(); // 重置工具调用 map
           _lastThinking = null;  // 重置，避免下一条消息的 thinking 追加到旧 div
           done = true;
@@ -986,6 +1189,7 @@ async function sendChat() {
     }
   } finally {
     _sseBuffer = '';
+    _chatAbortCtrl = null;
     btn.dataset.thinking = '0';
     btn.textContent = '发送';
   }

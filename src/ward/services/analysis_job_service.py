@@ -13,6 +13,7 @@ from time import perf_counter
 from typing import Any
 
 from ward.core.config import get_config
+from ward.services.report_verifier import ReportVerifier
 
 
 JobHandler = Callable[[dict[str, Any]], dict[str, Any]]
@@ -339,6 +340,11 @@ class AnalysisJobService:
 
         duration_ms = int((perf_counter() - started) * 1000)
         if result.get("ok"):
+            verification = self._verify_result(job_id, job["type"], result)
+            result["verification"] = verification
+            if not verification.get("passed"):
+                self._mark_failed(job_id, "分析报告验证未通过", result, duration_ms)
+                return
             self._mark_succeeded(job_id, result, duration_ms)
         else:
             self._mark_failed(job_id, result.get("error") or "分析任务失败", result, duration_ms)
@@ -351,6 +357,21 @@ class AnalysisJobService:
         )
         with self._stage_timer(job_id, "execute_handler", "执行分析处理器"):
             return handler(payload)
+
+    def _verify_result(self, job_id: str, job_type: str, result: dict[str, Any]) -> dict[str, Any]:
+        """Run deterministic report verification and persist it in the trace."""
+        started = perf_counter()
+        self._trace(job_id, "stage_start", "开始验证分析报告", "verifying")
+        verification = ReportVerifier().verify(job_type, result).to_dict()
+        duration_ms = int((perf_counter() - started) * 1000)
+        if verification["passed"]:
+            message = "分析报告验证通过"
+            event = "verification_passed"
+        else:
+            message = "分析报告验证未通过"
+            event = "verification_failed"
+        self._trace(job_id, event, message, "verifying", verification, duration_ms)
+        return verification
 
     def _mark_running(self, job_id: str) -> None:
         now = self._now()

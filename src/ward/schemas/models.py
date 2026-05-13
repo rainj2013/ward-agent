@@ -96,6 +96,15 @@ class ChatRequest(BaseModel):
     context: ChatContext | None = None
 
 
+class StockComparisonRequest(BaseModel):
+    symbols: list[str]
+    objective: str | None = None
+
+
+class ChatMessageUpdateRequest(BaseModel):
+    content: str
+
+
 class MessageResponse(BaseModel):
     role: str
     content: str

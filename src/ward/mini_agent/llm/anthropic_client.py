@@ -122,6 +122,15 @@ class AnthropicClient(LLMClientBase):
         system_message = None
         api_messages = []
 
+        pending_tool_results = []
+
+        def flush_tool_results():
+            nonlocal pending_tool_results
+            if not pending_tool_results:
+                return
+            api_messages.append({"role": "user", "content": pending_tool_results})
+            pending_tool_results = []
+
         for msg in messages:
             if msg.role == "system":
                 system_message = msg.content
@@ -129,6 +138,7 @@ class AnthropicClient(LLMClientBase):
 
             # For user and assistant messages
             if msg.role in ["user", "assistant"]:
+                flush_tool_results()
                 # Handle assistant messages with thinking or tool calls
                 if msg.role == "assistant" and (msg.thinking or msg.tool_calls):
                     # Build content blocks for assistant with thinking and/or tool calls
@@ -161,19 +171,15 @@ class AnthropicClient(LLMClientBase):
             # For tool result messages
             elif msg.role == "tool":
                 # Anthropic uses user role with tool_result content blocks
-                api_messages.append(
+                pending_tool_results.append(
                     {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": msg.tool_call_id,
-                                "content": msg.content,
-                            }
-                        ],
+                        "type": "tool_result",
+                        "tool_use_id": msg.tool_call_id,
+                        "content": msg.content,
                     }
                 )
 
+        flush_tool_results()
         return system_message, api_messages
 
     def _prepare_request(

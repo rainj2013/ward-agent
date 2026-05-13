@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import json
 import asyncio
+import re
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from pathlib import Path
+from typing import Any
 
 from ward.schemas.models import (
     AnalysisJobCreateResponse,
     AnalysisJobResponse,
     ChatRequest,
+    ChatMessageUpdateRequest,
     ChatResponse,
     ExtendedPriceResponse,
     HistoryResponse, HistoryPaginatedResponse,
@@ -21,6 +24,7 @@ from ward.schemas.models import (
     MessageResponse,
     QuoteResponse,
     ReportResponse,
+    StockComparisonRequest,
     StockAnalysisResponse,
     StockHistoryResponse,
     StockKlineResponse,
@@ -33,18 +37,25 @@ from ward.services.history_service import HistoryService
 from ward.services.index_service import IndexService
 from ward.services.nasdaq_service import MarketService
 from ward.services.report_service import ReportService
+from ward.services.stock_comparison_service import StockComparisonService
 from ward.services.stock_service import StockService
+from ward.services.stock_symbols import normalize_stock_symbol
 
 router = APIRouter()
 ms = MarketService()
 rs = ReportService()
 hs = HistoryService()
 ss = StockService()
+scs = StockComparisonService()
 is_ = IndexService()
 ajs = AnalysisJobService(concurrency=1)
 ajs.register_handler("stock_analysis", lambda payload: ss.generate_analysis(payload["symbol"], trace=payload.get("_trace")))
 ajs.register_handler("index_analysis", lambda payload: is_.generate_analysis(payload["prefix"], trace=payload.get("_trace")))
 ajs.register_handler("market_report", lambda payload: rs.generate_market_report(trace=payload.get("_trace")))
+ajs.register_handler(
+    "stock_comparison",
+    lambda payload: scs.generate_comparison(payload["symbols"], payload.get("objective"), trace=payload.get("_trace")),
+)
 
 _static_dir = Path(__file__).parent.parent.parent.parent / "static"
 
@@ -273,6 +284,19 @@ async def create_market_report_job():
         return AnalysisJobCreateResponse(ok=False, error=str(exc))
 
 
+@router.post("/api/analysis-jobs/compare", response_model=AnalysisJobCreateResponse)
+async def create_stock_comparison_job(req: StockComparisonRequest):
+    """Create a queued Leader/Worker/Verifier comparison job for multiple stocks."""
+    try:
+        job = await ajs.create_job(
+            "stock_comparison",
+            {"symbols": req.symbols, "objective": req.objective},
+        )
+        return AnalysisJobCreateResponse(ok=True, job=job)
+    except Exception as exc:
+        return AnalysisJobCreateResponse(ok=False, error=str(exc))
+
+
 @router.get("/api/analysis-jobs/{job_id}", response_model=AnalysisJobResponse)
 async def get_analysis_job(job_id: str):
     """Get the latest persisted state for an analysis job."""
@@ -345,6 +369,8 @@ async def sse_format(chunk: dict, conversation_id: int) -> str:
         "thinking": chunk.get("thinking"),
         "tool_call": chunk.get("tool_call"),
         "tool_result": _compact_tool_result(chunk.get("tool_result")),
+        "job": chunk.get("job"),
+        "assistant_message_id": chunk.get("assistant_message_id"),
         "done": chunk.get("done", False),
         "messages": chunk.get("messages"),
     }, ensure_ascii=False, separators=(",", ":"))
@@ -353,19 +379,59 @@ async def sse_format(chunk: dict, conversation_id: int) -> str:
 
 # ── Chat endpoints ────────────────────────────────────────────────────────────
 
+_COMPARE_INTENT_WORDS = (
+    "比较",
+    "对比",
+    "哪个更好",
+    "哪只更好",
+    "选哪个",
+    "买哪个",
+    "排序",
+    "排名",
+    "相对机会",
+    "相对风险",
+    "compare",
+    "versus",
+    " vs ",
+)
+
+
+def _detect_stock_comparison_intent(message: str) -> dict[str, Any] | None:
+    """Detect simple multi-stock comparison requests without an LLM call."""
+    text = f" {message.strip()} "
+    lowered = text.lower()
+    if not any(word in lowered for word in _COMPARE_INTENT_WORDS):
+        return None
+
+    candidates = re.findall(r"(?<![A-Za-z])\$?([A-Za-z]{1,5})(?![A-Za-z])", text)
+    symbols: list[str] = []
+    for candidate in candidates:
+        symbol = normalize_stock_symbol(candidate)
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+
+    if len(symbols) < 2 or len(symbols) > 6:
+        return None
+
+    return {"symbols": symbols, "objective": message.strip()}
+
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     """Send a chat message and get AI response (non-streaming)."""
     agent = get_ward_agent()
+    conversation_id = req.conversation_id or hs.conversations.create_conversation()
+    hs.conversations.add_message(conversation_id, "user", req.message)
     final_reply = ""
-    async for chunk in agent.chat_stream(req.conversation_id, req.message, req.context):
+    async for chunk in agent.chat_stream(conversation_id, req.message, req.context):
         if chunk.get("chunk"):
-            final_reply = chunk.get("chunk", "")
+            final_reply += chunk.get("chunk", "")
         if chunk.get("done"):
             break
+    if final_reply:
+        hs.conversations.add_message(conversation_id, "assistant", final_reply)
     return ChatResponse(
         ok=True,
-        conversation_id=req.conversation_id,
+        conversation_id=conversation_id,
         reply=final_reply,
         messages=[],
         error=None,
@@ -376,16 +442,51 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     """Send a chat message and stream AI response chunks via SSE."""
     agent = get_ward_agent()
-    cancel_event = _get_or_create_cancel_event(req.conversation_id)
+    conversation_id = req.conversation_id or hs.conversations.create_conversation()
+    hs.conversations.add_message(conversation_id, "user", req.message)
+    cancel_event = _get_or_create_cancel_event(conversation_id)
 
     async def event_generator():
+        reply_parts: list[str] = []
         try:
-            async for chunk in agent.chat_stream(req.conversation_id, req.message, req.context, cancel_event):
+            comparison = _detect_stock_comparison_intent(req.message)
+            if comparison:
+                job = await ajs.create_job("stock_comparison", comparison)
+                symbols = "、".join(comparison["symbols"])
+                reply = (
+                    f"已为 {symbols} 创建多股对比 Team 任务。"
+                    f"你可以在 Runtime 查看 Leader / Worker / Verifier 的执行过程：/runtime?job_id={job['id']}"
+                )
+                assistant_message_id = hs.conversations.add_message(conversation_id, "assistant", reply)
+                yield await sse_format(
+                    {
+                        "conversation_id": conversation_id,
+                        "chunk": reply,
+                        "assistant_message_id": assistant_message_id,
+                        "job": {
+                            "id": job["id"],
+                            "type": job["type"],
+                            "symbols": comparison["symbols"],
+                            "objective": comparison["objective"],
+                            "trace_url": f"/runtime?job_id={job['id']}",
+                        },
+                        "done": True,
+                    },
+                    conversation_id,
+                )
+                return
+
+            async for chunk in agent.chat_stream(conversation_id, req.message, req.context, cancel_event):
                 if not chunk.get("ok"):
                     yield f"data: {json.dumps({'ok': False, 'error': chunk.get('error', 'Unknown error'), 'done': True})}\n\n"
                     break
-                yield await sse_format(chunk, req.conversation_id)
+                if chunk.get("chunk"):
+                    reply_parts.append(chunk["chunk"])
+                yield await sse_format(chunk, conversation_id)
                 if chunk.get("done"):
+                    reply = "".join(reply_parts).strip()
+                    if reply:
+                        hs.conversations.add_message(conversation_id, "assistant", reply)
                     break
         except asyncio.CancelledError:
             # Fetch was aborted by client (e.g. user clicked cancel) — signal done
@@ -394,7 +495,7 @@ async def chat_stream(req: ChatRequest):
         except Exception as exc:
             yield f"data: {json.dumps({'ok': False, 'error': str(exc), 'done': True}, ensure_ascii=False)}\n\n"
         finally:
-            _clear_cancel_event(req.conversation_id)
+            _clear_cancel_event(conversation_id)
 
     return StreamingResponse(
         event_generator(),
@@ -416,6 +517,15 @@ async def cancel_chat(conversation_id: int):
         cancel_event.set()
         return {"ok": True, "message": "Cancelled"}
     return {"ok": False, "error": "No active conversation to cancel"}
+
+
+@router.put("/api/chat/{conversation_id}/messages/{message_id}")
+async def update_chat_message(conversation_id: int, message_id: int, req: ChatMessageUpdateRequest):
+    """Update a persisted assistant message after an async job completes."""
+    ok = hs.conversations.update_message(conversation_id, message_id, "assistant", req.content)
+    if not ok:
+        return {"ok": False, "error": "Message not found"}
+    return {"ok": True}
 
 
 @router.get("/api/history/{conversation_id}", response_model=HistoryResponse)

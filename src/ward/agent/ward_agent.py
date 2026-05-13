@@ -183,11 +183,15 @@ class WardMiniAgent:
         self._agent.add_user_message(message)
 
         # Delegate entirely to framework's run_streaming()
-        final_text = ""
+        streamed_text = ""
         async for event in self._agent.run_streaming(cancel_event=cancel_event):
             if event.type == "final":
                 final_text = event.final_text or ""
+                if final_text and not streamed_text.endswith(final_text):
+                    streamed_text += final_text
+                    yield _make_sse_event(conversation_id, chunk=final_text)
             elif event.type == "content":
+                streamed_text += event.content or ""
                 yield _make_sse_event(conversation_id, chunk=event.content)
             elif event.type == "thinking":
                 yield _make_sse_event(conversation_id, thinking=event.thinking)

@@ -334,6 +334,55 @@ header h1 {
 .stock-loading { color: #8b949e; font-size: 0.8rem; padding: 0.5rem 0; }
 .stock-error { color: #f85149; font-size: 0.8rem; padding: 0.5rem 0; }
 
+/* ─── Stock Team Comparison ───────────────────────────────────────────────── */
+
+.compare-section {
+  background: #161b22;
+  border-radius: 8px;
+  padding: 1.2rem 1.25rem;
+  border: 1px solid #30363d;
+  margin-bottom: 0.85rem;
+}
+.compare-section h2 {
+  font-size: 0.82rem;
+  margin-bottom: 0.85rem;
+  color: #8b949e;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.compare-row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 0.9fr) minmax(14rem, 1.1fr) auto;
+  gap: 0.5rem;
+}
+.compare-row input {
+  min-width: 0;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  padding: 0.55rem 0.85rem;
+  font-size: 0.85rem;
+  outline: none;
+  font-family: "SF Mono", "PingFang SC", monospace;
+  transition: border-color 0.15s;
+}
+.compare-row input:focus { border-color: #58a6ff; }
+.compare-row button {
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  padding: 0.55rem 1.2rem;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+.compare-row button:hover { background: #30363d; border-color: #484f58; }
+.compare-row button:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* ─── AI Report ───────────────────────────────────────────────────────────── */
 
 .report-section {
@@ -607,6 +656,57 @@ header h1 {
 .think-label { color: #8b949e; margin-right: 0.35em; }
 .think-text { color: #8b949e; }
 
+.chat-job-card {
+  margin-top: 0.65rem;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-left: 3px solid #58a6ff;
+  border-radius: 6px;
+  padding: 0.75rem 0.85rem;
+  font-size: 0.8rem;
+}
+.chat-job-title {
+  color: #e6edf3;
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+}
+.chat-job-symbols {
+  color: #c9d1d9;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0.35rem;
+}
+.chat-job-meta {
+  color: #8b949e;
+  margin-bottom: 0.35rem;
+}
+.chat-job-status {
+  color: #8b949e;
+  font-size: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+.chat-job-card.error {
+  border-left-color: #f85149;
+}
+.chat-job-meta code {
+  color: #c9d1d9;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  padding: 0.08rem 0.25rem;
+}
+.chat-job-card a {
+  color: #58a6ff;
+  font-weight: 700;
+  text-decoration: none;
+}
+.chat-job-card a:hover { text-decoration: underline; }
+.chat-job-result {
+  margin-top: 0.7rem;
+  border-top: 1px solid #21262d;
+  padding-top: 0.65rem;
+}
+
 @keyframes toolPulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.5; }
@@ -852,6 +952,77 @@ header h1 {
 }
 .runtime-muted { color: #8b949e; font-size: 0.82rem; }
 
+.runtime-team {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 0.85rem;
+  margin-bottom: 0.8rem;
+}
+.runtime-team-title {
+  color: #e6edf3;
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 0.65rem;
+}
+.runtime-team-grid {
+  display: grid;
+  grid-template-columns: 0.8fr 1.5fr 0.9fr;
+  gap: 0.6rem;
+}
+.runtime-team-card {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 0.7rem;
+  min-width: 0;
+}
+.runtime-team-card.ok { border-color: rgba(63,185,80,0.55); }
+.runtime-team-card.error { border-color: rgba(248,81,73,0.6); }
+.runtime-team-card-label {
+  color: #8b949e;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.35rem;
+}
+.runtime-team-card-value {
+  color: #e6edf3;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+.runtime-team-card-note {
+  color: #8b949e;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  margin-top: 0.35rem;
+  word-break: break-word;
+}
+.runtime-team-card-note.error { color: #f85149; }
+.runtime-team-workers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.45rem;
+}
+.runtime-team-worker {
+  border: 1px solid #30363d;
+  border-radius: 5px;
+  padding: 0.5rem;
+}
+.runtime-team-worker.ok { border-left: 3px solid #3fb950; }
+.runtime-team-worker.error { border-left: 3px solid #f85149; }
+.runtime-team-worker-symbol {
+  color: #e6edf3;
+  font-weight: 800;
+  font-size: 0.82rem;
+}
+.runtime-team-worker-meta {
+  color: #8b949e;
+  font-size: 0.7rem;
+  margin-top: 0.2rem;
+}
+
 .analysis-job-meta {
   margin-top: 0.55rem;
   color: #8b949e;
@@ -889,6 +1060,8 @@ header h1 {
 
 @media (max-width: 900px) {
   .cards { grid-template-columns: repeat(2, 1fr); }
+  .compare-row { grid-template-columns: 1fr; }
+  .runtime-team-grid { grid-template-columns: 1fr; }
   .runtime-stats-grid,
   .runtime-trace-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .runtime-event { grid-template-columns: 1fr; gap: 0.2rem; }
