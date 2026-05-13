@@ -453,59 +453,6 @@ async function runAnalysisJob(createUrl, onStatus, onDone, createOptions = {}) {
   throw new Error('分析任务连接中断');
 }
 
-async function generateStockComparison() {
-  const symbolsInput = document.getElementById('compare-symbols-input');
-  const objectiveInput = document.getElementById('compare-objective-input');
-  const btn = document.getElementById('compare-generate-btn');
-  const content = document.getElementById('compare-content');
-  const symbols = symbolsInput.value
-    .split(/[,\s]+/)
-    .map(item => item.trim().toUpperCase())
-    .filter(Boolean)
-    .filter((item, idx, arr) => arr.indexOf(item) === idx);
-
-  if (symbols.length < 2) {
-    content.innerHTML = '<p class="hint" style="color:#ef4444">请输入至少 2 个股票代码。</p>';
-    return;
-  }
-  if (symbols.length > 6) {
-    content.innerHTML = '<p class="hint" style="color:#ef4444">单次最多支持 6 个股票代码。</p>';
-    return;
-  }
-
-  btn.disabled = true;
-  btn.textContent = '对比中...';
-  renderReportStatus(content, 'Team 任务排队中...', null);
-
-  try {
-    await runAnalysisJob(
-      '/api/analysis-jobs/compare',
-      (message, data) => {
-        const jobId = data && data.job ? data.job.id : null;
-        renderReportStatus(content, message, jobId);
-      },
-      (report, result, job) => {
-        const jobHtml = job && job.id
-          ? `<div class="analysis-job-meta">Job: <code>${escapeHtml(job.id)}</code> · <a href="/runtime?job_id=${encodeURIComponent(job.id)}" target="_blank" rel="noopener">查看 Trace</a></div>`
-          : '';
-        renderStreamingHtml(content, `${renderMarkdown(report)}${jobHtml}`);
-      },
-      {
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbols,
-          objective: objectiveInput.value.trim() || null,
-        }),
-      }
-    );
-  } catch (e) {
-    content.innerHTML = `<p class="hint" style="color:#ef4444">请求失败: ${escapeHtml(e.message)}</p>`;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '重新对比';
-  }
-}
-
 function rememberRuntimeJob(jobId) {
   if (!jobId) return;
   const input = document.getElementById('runtime-job-input');
@@ -571,7 +518,8 @@ function pollChatJobResult(job, replyContent, getIntroText, options = {}) {
         );
         replyContent.innerHTML = `${renderMarkdown(intro)}${jobHtml}<div class="chat-job-result">${renderMarkdown(report)}</div>`;
         persistAssistantMessage(options.conversationId, options.messageId, persistedContent);
-        replyContent.closest('.chat-messages').scrollTop = replyContent.closest('.chat-messages').scrollHeight;
+        const scrollContainer = replyContent.closest('.chat-messages');
+        if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
       } else if (snapshot.status === 'failed') {
         clearInterval(timer);
         if (card) {
@@ -837,9 +785,40 @@ function _msgToDiv(msg) {
   if (msg.role === 'user') {
     div.textContent = msg.content;
   } else {
-    div.innerHTML = typeof marked !== 'undefined' ? marked.parse(msg.content) : escapeHtml(msg.content);
+    const content = msg.content || '';
+    const job = extractChatJobFromContent(content);
+    if (job) {
+      const intro = extractChatJobIntro(content);
+      div.innerHTML = `${renderMarkdown(content)}${renderChatJobCard(job)}`;
+      pollChatJobResult(job, div, () => intro, {
+        conversationId,
+        messageId: msg.id,
+      });
+    } else {
+      div.innerHTML = renderMarkdown(content);
+    }
   }
   return div;
+}
+
+function extractChatJobFromContent(content) {
+  const match = String(content || '').match(/\/runtime\?job_id=([A-Za-z0-9_-]+)/);
+  if (!match) return null;
+  const symbolsMatch = String(content || '').match(/已为\s+(.+?)\s+创建多股对比/);
+  const symbols = symbolsMatch
+    ? symbolsMatch[1].split(/[、,\s]+/).filter(Boolean)
+    : [];
+  return {
+    id: match[1],
+    type: 'stock_comparison',
+    symbols,
+    trace_url: `/runtime?job_id=${match[1]}`,
+  };
+}
+
+function extractChatJobIntro(content) {
+  const lines = String(content || '').split('\n').map(line => line.trim()).filter(Boolean);
+  return lines.find(line => line.includes('/runtime?job_id=')) || String(content || '').trim();
 }
 
 function renderMessages(messages, prepend = false) {
@@ -1039,20 +1018,21 @@ async function sendChat() {
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
-    let done = false;
+    let streamClosed = false;
+    let chatDone = false;
     let fullReply = '';
     let activeJob = null;
     let assistantMessageId = null;
     let convId = conversationId;
     const reqStart = Date.now();
 
-    while (!done) {
+    while (!streamClosed && !chatDone) {
       const { value, done: readerDone } = await reader.read();
-      done = readerDone;
+      streamClosed = readerDone;
       if (!value) continue;
 
       // Reusable buffer to reassemble SSE events split across TCP packets
-      _sseBuffer = (_sseBuffer || '') + decoder.decode(value, { stream: !done });
+      _sseBuffer = (_sseBuffer || '') + decoder.decode(value, { stream: !streamClosed });
 
       // Split on SSE event boundaries; keep the trailing partial event buffered.
       let parts = _sseBuffer.split(/\r?\n\r?\n/);
@@ -1107,10 +1087,14 @@ async function sendChat() {
         // 通用对话事件
         if (!data.ok) {
           replyContent.textContent = `出错: ${data.error}`;
-          done = true;
+          chatDone = true;
           break;
         }
         convId = data.conversation_id;
+        if (convId && conversationId !== convId) {
+          conversationId = convId;
+          localStorage.setItem('ward_conversation_id', convId);
+        }
         if (data.assistant_message_id) {
           assistantMessageId = data.assistant_message_id;
         }
@@ -1162,7 +1146,7 @@ async function sendChat() {
           }
           _toolInvokeMap.clear(); // 重置工具调用 map
           _lastThinking = null;  // 重置，避免下一条消息的 thinking 追加到旧 div
-          done = true;
+          chatDone = true;
         } else if (data.thinking) {
           // 模型思考中 → 累积追加到同一个 div，保持顺序
           if (_lastThinking) {
@@ -1177,6 +1161,25 @@ async function sendChat() {
           }
         }
         // else: unknown event type — ignore
+      }
+    }
+
+    if (!chatDone && _sseBuffer.trim()) {
+      try {
+        const data = parseSseEvent(_sseBuffer);
+        if (data && !data.ok) {
+          replyContent.textContent = `出错: ${data.error}`;
+        } else if (data && data.chunk) {
+          fullReply += data.chunk;
+          replyContent.innerHTML = renderMarkdown(fullReply)
+            + (activeJob ? renderChatJobCard(activeJob) : '');
+        }
+        if (data && data.done) {
+          conversationId = data.conversation_id || convId;
+          localStorage.setItem('ward_conversation_id', conversationId);
+        }
+      } catch(e) {
+        console.error('[WARD] final SSE parse error:', e.message);
       }
     }
   } catch (e) {

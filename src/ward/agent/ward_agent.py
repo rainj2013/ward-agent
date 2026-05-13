@@ -153,6 +153,17 @@ class WardMiniAgent:
         """Reset the agent's message history for a fresh conversation."""
         self._agent.messages = [Message(role="system", content=WARD_SYSTEM_PROMPT)]
 
+    def load_conversation_history(self, messages: list[dict[str, Any]] | None, max_messages: int = 20) -> None:
+        """Load persisted user/assistant turns into a fresh agent instance."""
+        self.reset_conversation()
+        if not messages:
+            return
+        for msg in messages[-max_messages:]:
+            role = msg.get("role")
+            content = str(msg.get("content") or "")
+            if role in {"user", "assistant"} and content:
+                self._agent.messages.append(Message(role=role, content=content))
+
     async def chat_stream(
         self,
         conversation_id: int,
@@ -172,10 +183,6 @@ class WardMiniAgent:
           - tool_result: dict (tool execution result)
           - done: bool
         """
-        # Reset history if new conversation
-        if conversation_id == 0:
-            self.reset_conversation()
-
         # Inject page context into system prompt so the model knows what's already loaded
         self._inject_context(context)
 

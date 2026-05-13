@@ -40,6 +40,9 @@ class KlineItem(BaseModel):
     low: float
     close: float
     volume: float
+    change: float | None = None
+    changePercent: str | None = None
+    change_pct: float | None = None
 
 
 class ExtendedHoursItem(BaseModel):
@@ -96,16 +99,12 @@ class ChatRequest(BaseModel):
     context: ChatContext | None = None
 
 
-class StockComparisonRequest(BaseModel):
-    symbols: list[str]
-    objective: str | None = None
-
-
 class ChatMessageUpdateRequest(BaseModel):
     content: str
 
 
 class MessageResponse(BaseModel):
+    id: int | None = None
     role: str
     content: str
     created_at: str

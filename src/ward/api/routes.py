@@ -24,14 +24,13 @@ from ward.schemas.models import (
     MessageResponse,
     QuoteResponse,
     ReportResponse,
-    StockComparisonRequest,
     StockAnalysisResponse,
     StockHistoryResponse,
     StockKlineResponse,
     StockQuoteResponse,
     StockSearchResponse,
 )
-from ward.agent.ward_agent import get_ward_agent
+from ward.agent.ward_agent import WardMiniAgent
 from ward.services.analysis_job_service import AnalysisJobService
 from ward.services.history_service import HistoryService
 from ward.services.index_service import IndexService
@@ -284,19 +283,6 @@ async def create_market_report_job():
         return AnalysisJobCreateResponse(ok=False, error=str(exc))
 
 
-@router.post("/api/analysis-jobs/compare", response_model=AnalysisJobCreateResponse)
-async def create_stock_comparison_job(req: StockComparisonRequest):
-    """Create a queued Leader/Worker/Verifier comparison job for multiple stocks."""
-    try:
-        job = await ajs.create_job(
-            "stock_comparison",
-            {"symbols": req.symbols, "objective": req.objective},
-        )
-        return AnalysisJobCreateResponse(ok=True, job=job)
-    except Exception as exc:
-        return AnalysisJobCreateResponse(ok=False, error=str(exc))
-
-
 @router.get("/api/analysis-jobs/{job_id}", response_model=AnalysisJobResponse)
 async def get_analysis_job(job_id: str):
     """Get the latest persisted state for an analysis job."""
@@ -403,9 +389,13 @@ def _detect_stock_comparison_intent(message: str) -> dict[str, Any] | None:
     if not any(word in lowered for word in _COMPARE_INTENT_WORDS):
         return None
 
-    candidates = re.findall(r"(?<![A-Za-z])\$?([A-Za-z]{1,5})(?![A-Za-z])", text)
+    candidates = re.findall(r"(?<![A-Za-z])(\$?)([A-Za-z]{1,5})(?![A-Za-z])", text)
     symbols: list[str] = []
-    for candidate in candidates:
+    for dollar, candidate in candidates:
+        # Only fast-path explicit ticker-like tokens. Lowercase words such as
+        # "from" and "angle" should fall through to the regular agent.
+        if not dollar and candidate != candidate.upper():
+            continue
         symbol = normalize_stock_symbol(candidate)
         if symbol and symbol not in symbols:
             symbols.append(symbol)
@@ -413,13 +403,32 @@ def _detect_stock_comparison_intent(message: str) -> dict[str, Any] | None:
     if len(symbols) < 2 or len(symbols) > 6:
         return None
 
-    return {"symbols": symbols, "objective": message.strip()}
+    valid_symbols: list[str] = []
+    for symbol in symbols:
+        try:
+            quote = ss.get_quote(symbol)
+        except Exception:
+            quote = {"ok": False}
+        if quote.get("ok") and symbol not in valid_symbols:
+            valid_symbols.append(symbol)
+
+    if len(valid_symbols) < 2:
+        return None
+
+    return {"symbols": valid_symbols, "objective": message.strip()}
+
+
+def _build_chat_agent(conversation_id: int) -> WardMiniAgent:
+    agent = WardMiniAgent()
+    history = hs.conversations.get_messages(conversation_id, limit=20)
+    agent.load_conversation_history(history)
+    return agent
 
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     """Send a chat message and get AI response (non-streaming)."""
-    agent = get_ward_agent()
     conversation_id = req.conversation_id or hs.conversations.create_conversation()
+    agent = _build_chat_agent(conversation_id)
     hs.conversations.add_message(conversation_id, "user", req.message)
     final_reply = ""
     async for chunk in agent.chat_stream(conversation_id, req.message, req.context):
@@ -441,14 +450,15 @@ async def chat(req: ChatRequest):
 @router.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
     """Send a chat message and stream AI response chunks via SSE."""
-    agent = get_ward_agent()
     conversation_id = req.conversation_id or hs.conversations.create_conversation()
+    agent = _build_chat_agent(conversation_id)
     hs.conversations.add_message(conversation_id, "user", req.message)
     cancel_event = _get_or_create_cancel_event(conversation_id)
 
     async def event_generator():
         reply_parts: list[str] = []
         try:
+            yield await sse_format({"conversation_id": conversation_id}, conversation_id)
             comparison = _detect_stock_comparison_intent(req.message)
             if comparison:
                 job = await ajs.create_job("stock_comparison", comparison)
