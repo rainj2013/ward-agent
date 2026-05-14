@@ -1374,9 +1374,9 @@ header h1 {
 .chat-messages {
   min-height: 260px;
   max-height: 620px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 1rem;
   overflow-y: auto;
 }
@@ -1402,10 +1402,13 @@ header h1 {
   background: var(--panel-3);
   border-color: var(--line);
   color: var(--muted);
+  align-self: flex-start;
 }
 .chat-msg.user {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   box-shadow: 0 12px 30px var(--accent-soft);
+  align-self: flex-end;
+  text-align: left;
 }
 .chat-input-row {
   background: var(--panel-3);
@@ -1709,7 +1712,8 @@ header h1 {
   border: 1px solid #21262d;
   border-radius: 6px;
   padding: 0.7rem;
-  max-height: 360px;
+  min-height: 460px;
+  max-height: min(72vh, 720px);
   overflow: auto;
 }
 .runtime-trace-summary {
@@ -1746,6 +1750,29 @@ header h1 {
   font-size: 0.7rem;
   white-space: pre-wrap;
   word-break: break-word;
+  margin: 0;
+  font-family: "SF Mono", monospace;
+}
+.runtime-event-data-collapsed {
+  white-space: normal;
+}
+.runtime-event-data-collapsed summary {
+  cursor: pointer;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  background: #161b22;
+  user-select: none;
+}
+.runtime-event-data-collapsed summary:hover {
+  border-color: #484f58;
+}
+.runtime-event-data-collapsed pre {
+  margin-top: 0.45rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SF Mono", monospace;
 }
 .runtime-muted { color: #8b949e; font-size: 0.82rem; }
 
@@ -1862,6 +1889,7 @@ header h1 {
   .runtime-trace-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .runtime-event { grid-template-columns: 1fr; gap: 0.2rem; }
   .runtime-event-data { grid-column: auto; }
+  .runtime-trace { min-height: 360px; max-height: 68vh; }
 }
 
 /* Final theme unification overrides */

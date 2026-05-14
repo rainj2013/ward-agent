@@ -779,7 +779,7 @@ function renderRuntimeTrace(job, events) {
         <div class="runtime-event-stage">${escapeHtml(ev.stage || ev.event || '--')}</div>
         <div class="runtime-event-message">${escapeHtml(ev.message || '')}</div>
         <div class="runtime-event-duration">${escapeHtml(formatDurationMs(ev.duration_ms))}</div>
-        ${data ? `<div class="runtime-event-data">${escapeHtml(data)}</div>` : ''}
+        ${renderRuntimeEventData(data)}
       </div>
     `;
   }).join('');
@@ -789,6 +789,19 @@ function renderRuntimeTrace(job, events) {
     ${teamOverview}
     ${eventHtml || '<div class="runtime-muted">暂无事件。</div>'}
   `;
+}
+
+function renderRuntimeEventData(data) {
+  if (!data) return '';
+  const lineCount = data.split('\n').length;
+  const shouldCollapse = data.length > 1200 || lineCount > 24;
+  if (!shouldCollapse) {
+    return `<pre class="runtime-event-data">${escapeHtml(data)}</pre>`;
+  }
+  return `<details class="runtime-event-data runtime-event-data-collapsed">
+    <summary>报文较长，点击展开 · ${lineCount} 行 · ${fmtRuntimeNumber(data.length)} 字符</summary>
+    <pre>${escapeHtml(data)}</pre>
+  </details>`;
 }
 
 function renderRuntimeTeamOverview(job, events) {
