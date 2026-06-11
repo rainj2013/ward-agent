@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, AsyncGenerator
 
 from ward.mini_agent.llm import LLMClient
@@ -18,6 +19,14 @@ from ward.agent.context_manager import (
     should_update_summary,
 )
 from ward.agent.ward_tools import get_all_tools
+
+
+CHAT_CONTEXT_META_RE = re.compile(r"^<!--ward-context-events:[\s\S]*?-->\n?")
+
+
+def _strip_chat_context_meta(content: str) -> str:
+    """Remove UI-only context event metadata from persisted assistant messages."""
+    return CHAT_CONTEXT_META_RE.sub("", content, count=1)
 
 
 # ── System Prompt ──────────────────────────────────────────────────────────────
@@ -122,12 +131,13 @@ class WardMiniAgent:
                 "recent_messages": 0,
                 "recent_tokens_est": 0,
             }
+        recent_messages = []
         for msg in messages[-max_messages:]:
             role = msg.get("role")
-            content = str(msg.get("content") or "")
+            content = _strip_chat_context_meta(str(msg.get("content") or ""))
             if role in {"user", "assistant"} and content:
+                recent_messages.append({**msg, "content": content})
                 self._agent.messages.append(Message(role=role, content=content))
-        recent_messages = messages[-max_messages:]
         return {
             "type": "history_load",
             "summary_tokens_est": estimate_tokens(summary_text),
@@ -139,6 +149,8 @@ class WardMiniAgent:
     async def update_persistent_summary(self, conversation_id: int, conversation_service: Any) -> dict[str, Any]:
         """Incrementally update the persisted conversation summary when useful."""
         all_messages = conversation_service.get_messages(conversation_id, limit=None)
+        for msg in all_messages:
+            msg["content"] = _strip_chat_context_meta(str(msg.get("content") or ""))
         if len(all_messages) <= SUMMARY_RECENT_MESSAGE_COUNT:
             return {
                 "type": "summary_skip",

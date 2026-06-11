@@ -515,8 +515,9 @@ async def chat_stream(req: ChatRequest):
                     reply_parts.append(chunk["chunk"])
                 if chunk.get("done"):
                     reply = "".join(reply_parts).strip()
+                    assistant_message_id = None
                     if reply:
-                        hs.conversations.add_message(conversation_id, "assistant", reply)
+                        assistant_message_id = hs.conversations.add_message(conversation_id, "assistant", reply)
                     asyncio.create_task(_update_summary_background(conversation_id))
                     summary_event = {
                         "type": "summary_skip",
@@ -526,6 +527,8 @@ async def chat_stream(req: ChatRequest):
                         {"conversation_id": conversation_id, "context_event": summary_event},
                         conversation_id,
                     )
+                    if assistant_message_id:
+                        chunk["assistant_message_id"] = assistant_message_id
                     yield await sse_format(chunk, conversation_id)
                     break
                 yield await sse_format(chunk, conversation_id)

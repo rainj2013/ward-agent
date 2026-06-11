@@ -185,9 +185,30 @@ function setChange(el, value) {
   el.className = 'change ' + (value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral');
 }
 
+function trendClass(value) {
+  return value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral';
+}
+
+function syncCardTrend(prefix, value) {
+  const trend = trendClass(value);
+  const card = document.getElementById(`card-${prefix}`);
+  if (!card) return;
+  card.classList.remove('trend-positive', 'trend-negative', 'trend-neutral');
+  card.classList.add(`trend-${trend}`);
+
+  const sparkline = card.querySelector('.mini-sparkline');
+  if (sparkline) {
+    sparkline.classList.remove('sparkline-red', 'sparkline-green', 'sparkline-gold', 'sparkline-neutral');
+    sparkline.classList.add(
+      trend === 'positive' ? 'sparkline-red' : trend === 'negative' ? 'sparkline-green' : 'sparkline-neutral'
+    );
+  }
+}
+
 function fillCard(prefix, data) {
   document.getElementById(prefix + '-price').textContent = fmt(data.close);
   setChange(document.getElementById(prefix + '-change'), data.change_pct);
+  syncCardTrend(prefix, data.change_pct);
   document.getElementById(prefix + '-open').textContent = fmt(data.open);
   document.getElementById(prefix + '-high').textContent = fmt(data.high);
   document.getElementById(prefix + '-low').textContent = fmt(data.low);
@@ -196,7 +217,7 @@ function fillCard(prefix, data) {
   const hdrChange = document.getElementById(prefix + '-header-change');
   if (hdrChange) {
     hdrChange.textContent = pct(data.change_pct);
-    hdrChange.className = 'card-change ' + (data.change_pct > 0 ? 'positive' : data.change_pct < 0 ? 'negative' : 'neutral');
+    hdrChange.className = 'card-change ' + trendClass(data.change_pct);
   }
   // Cache for chat context
   const indexNames = { ixic: 'Nasdaq 综合', dji: '道琼斯', spx: '标普500', gold: '黄金' };
@@ -652,6 +673,38 @@ function renderContextEvent(data) {
   return `<span class="context-event-type">${escapeHtml(typeLabel)}</span><span class="context-event-detail">${escapeHtml(detail)}</span>`;
 }
 
+const CHAT_CONTEXT_META_RE = /^<!--ward-context-events:([\s\S]*?)-->\n?/;
+
+function encodeChatContextMeta(events) {
+  if (!events || !events.length) return '';
+  try {
+    return `<!--ward-context-events:${JSON.stringify(events)}-->\n`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function splitChatContextMeta(content) {
+  const text = String(content || '');
+  const match = text.match(CHAT_CONTEXT_META_RE);
+  if (!match) return { events: [], content: text };
+  try {
+    const events = JSON.parse(match[1]);
+    return {
+      events: Array.isArray(events) ? events : [],
+      content: text.slice(match[0].length),
+    };
+  } catch (_) {
+    return { events: [], content: text.replace(CHAT_CONTEXT_META_RE, '') };
+  }
+}
+
+function renderContextEvents(events) {
+  return (events || [])
+    .map(ev => `<div class="chat-context-event">${renderContextEvent(ev)}</div>`)
+    .join('');
+}
+
 function persistAssistantMessage(conversationId, messageId, content) {
   if (!conversationId || !messageId || !content) return;
   fetch(`/api/chat/${conversationId}/messages/${messageId}`, {
@@ -680,7 +733,7 @@ function pollChatJobResult(job, replyContent, getIntroText, options = {}) {
         clearInterval(timer);
         const intro = getIntroText ? getIntroText() : '';
         const report = snapshot.result.report || '';
-        const persistedContent = `${intro}\n\n${report}`.trim();
+        const persistedContent = `${encodeChatContextMeta(options.contextEvents)}${`${intro}\n\n${report}`.trim()}`;
         const jobHtml = renderChatJobCard({ ...job, trace_url: `/runtime?job_id=${job.id}` }).replace(
           '任务运行中，完成后会自动回填结果。',
           '任务已完成。'
@@ -967,17 +1020,20 @@ function _msgToDiv(msg) {
   if (msg.role === 'user') {
     div.textContent = msg.content;
   } else {
-    const content = msg.content || '';
+    const parsed = splitChatContextMeta(msg.content || '');
+    const content = parsed.content;
+    const contextHtml = renderContextEvents(parsed.events);
     const job = extractChatJobFromContent(content);
     if (job) {
       const intro = extractChatJobIntro(content);
-      div.innerHTML = `${renderMarkdown(content)}${renderChatJobCard(job)}`;
+      div.innerHTML = `${contextHtml}${renderMarkdown(content)}${renderChatJobCard(job)}`;
       pollChatJobResult(job, div, () => intro, {
         conversationId,
         messageId: msg.id,
+        contextEvents: parsed.events,
       });
     } else {
-      div.innerHTML = renderMarkdown(content);
+      div.innerHTML = `${contextHtml}${renderMarkdown(content)}`;
     }
   }
   return div;
@@ -1206,6 +1262,7 @@ async function sendChat() {
     let activeJob = null;
     let assistantMessageId = null;
     let convId = conversationId;
+    const contextEvents = [];
     const reqStart = Date.now();
 
     while (!streamClosed && !chatDone) {
@@ -1266,6 +1323,7 @@ async function sendChat() {
           continue;
         }
         if (data.context_event) {
+          contextEvents.push(data.context_event);
           const contextDiv = document.createElement('div');
           contextDiv.className = 'chat-context-event';
           contextDiv.innerHTML = renderContextEvent(data.context_event);
@@ -1332,7 +1390,10 @@ async function sendChat() {
             pollChatJobResult(activeJob, replyContent, () => fullReply, {
               conversationId: convId,
               messageId: assistantMessageId,
+              contextEvents,
             });
+          } else if (assistantMessageId && contextEvents.length) {
+            persistAssistantMessage(convId, assistantMessageId, `${encodeChatContextMeta(contextEvents)}${fullReply}`);
           }
           _toolInvokeMap.clear(); // 重置工具调用 map
           _lastThinking = null;  // 重置，避免下一条消息的 thinking 追加到旧 div
@@ -2032,4 +2093,12 @@ function closeIndexChartOverlay() {
   _activeIndexChart = null;
 }
 
-document.addEventListener('DOMContentLoaded', initChat);
+function initFooterYear() {
+  const yearEl = document.getElementById('footer-year');
+  if (yearEl) yearEl.textContent = new Date().getFullYear().toString();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initFooterYear();
+  initChat();
+});
