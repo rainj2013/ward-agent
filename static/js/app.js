@@ -632,6 +632,26 @@ function renderChatJobCard(job) {
   </div>`;
 }
 
+function renderContextEvent(data) {
+  const ev = data || {};
+  const typeLabel = {
+    history_load: '历史加载',
+    context_digest: '页面摘要',
+    summary_update: '增量摘要',
+    summary_skip: '摘要检查',
+  }[ev.type] || '上下文';
+  const bits = [];
+  if (ev.summary_tokens_est != null) bits.push(`摘要 ${ev.summary_tokens_est} tok`);
+  if (ev.recent_messages != null) bits.push(`近端 ${ev.recent_messages} 条`);
+  if (ev.recent_tokens_est != null) bits.push(`近端 ${ev.recent_tokens_est} tok`);
+  if (ev.digest_tokens_est != null) bits.push(`页面 ${ev.digest_tokens_est} tok`);
+  if (ev.delta_messages != null) bits.push(`delta ${ev.delta_messages} 条`);
+  if (ev.delta_tokens_est != null) bits.push(`delta ${ev.delta_tokens_est} tok`);
+  if (ev.summary_until_message_id != null) bits.push(`至 #${ev.summary_until_message_id}`);
+  const detail = bits.length ? bits.join(' · ') : (ev.message || '');
+  return `<span class="context-event-type">${escapeHtml(typeLabel)}</span><span class="context-event-detail">${escapeHtml(detail)}</span>`;
+}
+
 function persistAssistantMessage(conversationId, messageId, content) {
   if (!conversationId || !messageId || !content) return;
   fetch(`/api/chat/${conversationId}/messages/${messageId}`, {
@@ -1243,6 +1263,14 @@ async function sendChat() {
               : '❌ ' + (data.tool_result.name || toolDiv.dataset.toolName) + ' 查询失败';
             container.scrollTop = container.scrollHeight;
           }
+          continue;
+        }
+        if (data.context_event) {
+          const contextDiv = document.createElement('div');
+          contextDiv.className = 'chat-context-event';
+          contextDiv.innerHTML = renderContextEvent(data.context_event);
+          answerDiv.insertBefore(contextDiv, replyContent);
+          container.scrollTop = container.scrollHeight;
           continue;
         }
 

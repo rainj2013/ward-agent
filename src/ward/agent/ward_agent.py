@@ -9,6 +9,14 @@ from ward.mini_agent.llm.llm_wrapper import LLMClient as MiniLLMClient
 from ward.mini_agent.schema import LLMProvider, Message
 from ward.mini_agent.agent import Agent as MiniAgent
 
+from ward.agent.context_manager import (
+    SUMMARY_RECENT_MESSAGE_COUNT,
+    build_context_digest,
+    build_summary_prompt,
+    estimate_messages_tokens,
+    estimate_tokens,
+    should_update_summary,
+)
 from ward.agent.ward_tools import get_all_tools
 
 
@@ -69,100 +77,119 @@ class WardMiniAgent:
             token_limit=80000,
         )
 
-    def _build_context_text(self, ctx: Any) -> str:
-        """Format ChatContext into a readable text block for the system prompt."""
-        if ctx is None:
-            return ""
-
-        def field(obj: Any, name: str, default: Any = "?") -> Any:
-            if isinstance(obj, dict):
-                return obj.get(name, default)
-            return getattr(obj, name, default)
-
-        parts = ["[页面已有数据]"]
-
-        # Index klines
-        if hasattr(ctx, "index_klines") and ctx.index_klines:
-            for prefix, bars in ctx.index_klines.items():
-                if not bars:
-                    continue
-                # latest bar
-                bar = bars[-1]
-                parts.append(
-                    f"- {prefix.upper()}指数K线: 最新日期={field(bar, 'date')}, "
-                    f"收盘={field(bar, 'close')}, 涨跌={field(bar, 'change')}({field(bar, 'changePercent')})"
-                )
-
-        # Stock klines
-        if hasattr(ctx, "stock_klines") and ctx.stock_klines:
-            for symbol, bars in ctx.stock_klines.items():
-                if not bars:
-                    continue
-                bar = bars[-1]
-                parts.append(
-                    f"- {symbol.upper()}K线: 最新日期={field(bar, 'date')}, "
-                    f"收盘={field(bar, 'close')}, 涨跌={field(bar, 'change')}({field(bar, 'changePercent')})"
-                )
-
-        # Stock quotes (个股实时行情)
-        if hasattr(ctx, "stocks") and ctx.stocks:
-            for stock in ctx.stocks:
-                parts.append(
-                    f"- {stock.name}({stock.symbol})行情: "
-                    f"现价={stock.close}, 涨跌={stock.change}({stock.change_pct}%), "
-                    f"开盘={stock.open}, 最高={stock.high}, 最低={stock.low}, 成交量={stock.volume}"
-                )
-
-        # Index analyses
-        if hasattr(ctx, "index_analyses") and ctx.index_analyses:
-            for prefix, report in ctx.index_analyses.items():
-                snippet = report[:100].replace("\n", " ") if report else "无"
-                parts.append(f"- {prefix.upper()}指数AI分析: {snippet}...")
-
-        # Stock analyses
-        if hasattr(ctx, "stock_analyses") and ctx.stock_analyses:
-            for symbol, report in ctx.stock_analyses.items():
-                snippet = report[:100].replace("\n", " ") if report else "无"
-                parts.append(f"- {symbol.upper()}AI分析: {snippet}...")
-
-        # Extended hours
-        if hasattr(ctx, "extended_hours") and ctx.extended_hours:
-            for prefix, eh in ctx.extended_hours.items():
-                parts.append(
-                    f"- {prefix.upper()}盘后/盘前: 现价={getattr(eh,'price',None)}, "
-                    f"涨跌={getattr(eh,'change',None)}({getattr(eh,'changePercent',None)})"
-                )
-
-        return "\n".join(parts) if len(parts) > 1 else ""
-
-    def _inject_context(self, context: Any | None):
-        """Re-inject page context into the system prompt (called every request)."""
-        ctx_text = self._build_context_text(context)
-        if not ctx_text:
-            return
-
-        marker = "[页面已有数据]"
-        sys_msg = self._agent.messages[0]
-        # Strip old block if present
-        if marker in sys_msg.content:
-            sys_msg.content = sys_msg.content[: sys_msg.content.index(marker)]
-        # Append fresh context
-        sys_msg.content = sys_msg.content.rstrip() + "\n\n" + ctx_text
+    def _build_context_message(self, context: Any | None, message: str) -> tuple[str, dict[str, Any]]:
+        """Place current page digest next to the current user message."""
+        digest = build_context_digest(context)
+        event = {
+            "type": "context_digest",
+            "message": "页面上下文已摘要并靠后注入，system prompt 保持稳定。",
+            **digest.stats,
+        }
+        if not digest.text:
+            return message, event
+        return f"{digest.text}\n\n[当前用户问题]\n{message}", event
 
     def reset_conversation(self):
         """Reset the agent's message history for a fresh conversation."""
         self._agent.messages = [Message(role="system", content=WARD_SYSTEM_PROMPT)]
 
-    def load_conversation_history(self, messages: list[dict[str, Any]] | None, max_messages: int = 20) -> None:
+    def load_conversation_history(
+        self,
+        messages: list[dict[str, Any]] | None,
+        summary: dict[str, Any] | None = None,
+        max_messages: int = 20,
+    ) -> dict[str, Any]:
         """Load persisted user/assistant turns into a fresh agent instance."""
         self.reset_conversation()
+        summary_text = ""
+        if summary and summary.get("summary"):
+            summary_text = str(summary["summary"]).strip()
+            self._agent.messages.append(
+                Message(
+                    role="user",
+                    content=(
+                        "[历史摘要]\n"
+                        "以下是已经离开最近保护区的对话摘要。行情类事实可能过期，实时价格必须重新查询工具。\n\n"
+                        f"{summary_text}"
+                    ),
+                )
+            )
         if not messages:
-            return
+            return {
+                "type": "history_load",
+                "summary_tokens_est": estimate_tokens(summary_text),
+                "summary_until_message_id": summary.get("summarized_until_message_id") if summary else None,
+                "recent_messages": 0,
+                "recent_tokens_est": 0,
+            }
         for msg in messages[-max_messages:]:
             role = msg.get("role")
             content = str(msg.get("content") or "")
             if role in {"user", "assistant"} and content:
                 self._agent.messages.append(Message(role=role, content=content))
+        recent_messages = messages[-max_messages:]
+        return {
+            "type": "history_load",
+            "summary_tokens_est": estimate_tokens(summary_text),
+            "summary_until_message_id": summary.get("summarized_until_message_id") if summary else None,
+            "recent_messages": len(recent_messages),
+            "recent_tokens_est": estimate_messages_tokens(recent_messages),
+        }
+
+    async def update_persistent_summary(self, conversation_id: int, conversation_service: Any) -> dict[str, Any]:
+        """Incrementally update the persisted conversation summary when useful."""
+        all_messages = conversation_service.get_messages(conversation_id, limit=None)
+        if len(all_messages) <= SUMMARY_RECENT_MESSAGE_COUNT:
+            return {
+                "type": "summary_skip",
+                "message": "消息仍在最近保护区内，暂不摘要。",
+                "total_messages": len(all_messages),
+                "protected_recent_messages": SUMMARY_RECENT_MESSAGE_COUNT,
+            }
+
+        summary = conversation_service.get_summary(conversation_id)
+        summarized_until = int(summary.get("summarized_until_message_id") or 0) if summary else 0
+        cutoff_messages = all_messages[:-SUMMARY_RECENT_MESSAGE_COUNT]
+        delta = [msg for msg in cutoff_messages if int(msg.get("id") or 0) > summarized_until]
+        should_update, decision = should_update_summary(delta)
+        if not should_update:
+            return {
+                "type": "summary_skip",
+                "message": "新增历史不足阈值，保留现有摘要。",
+                "summary_until_message_id": summarized_until or None,
+                **decision,
+            }
+
+        target_until = int(delta[-1]["id"])
+        prompt = build_summary_prompt(
+            previous_summary=str(summary.get("summary") or "") if summary else "",
+            delta_messages=delta,
+            summarized_until_message_id=summarized_until or None,
+        )
+        response = await self._llm_client.generate(
+            messages=[
+                Message(role="system", content="你是 Ward 的对话摘要维护器，只输出可继续工作的事实摘要。"),
+                Message(role="user", content=prompt),
+            ],
+            tools=None,
+        )
+        new_summary = response.content.strip()
+        usage = {}
+        if response.usage:
+            usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+        conversation_service.upsert_summary(conversation_id, new_summary, target_until, usage)
+        return {
+            "type": "summary_update",
+            "message": "持久摘要已增量更新。",
+            "summary_until_message_id": target_until,
+            "summary_tokens_est": estimate_tokens(new_summary),
+            **decision,
+            **usage,
+        }
 
     async def chat_stream(
         self,
@@ -183,11 +210,11 @@ class WardMiniAgent:
           - tool_result: dict (tool execution result)
           - done: bool
         """
-        # Inject page context into system prompt so the model knows what's already loaded
-        self._inject_context(context)
+        user_message, context_event = self._build_context_message(context, message)
+        yield _make_sse_event(conversation_id, context_event=context_event)
 
         # Add user message
-        self._agent.add_user_message(message)
+        self._agent.add_user_message(user_message)
 
         # Delegate entirely to framework's run_streaming()
         streamed_text = ""
@@ -240,6 +267,7 @@ def _make_sse_event(
     thinking: str | None = None,
     tool_call: dict | None = None,
     tool_result: dict | None = None,
+    context_event: dict | None = None,
     done: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -249,6 +277,7 @@ def _make_sse_event(
         "thinking": thinking,
         "tool_call": tool_call,
         "tool_result": tool_result,
+        "context_event": context_event,
         "done": done,
     }
 

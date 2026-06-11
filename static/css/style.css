@@ -607,6 +607,29 @@ header h1 {
 .think-label { color: #8b949e; margin-right: 0.35em; }
 .think-text { color: #8b949e; }
 
+.chat-context-event {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.32em 0.7em;
+  margin: 0.15em 0 0.15em 2.5em;
+  max-width: 82%;
+  font-size: 0.76rem;
+  color: #8b949e;
+  background: #0d1117;
+  border-left: 2px solid #58a6ff;
+  border-radius: 0 4px 4px 0;
+}
+.context-event-type {
+  color: #c9d1d9;
+  font-weight: 600;
+}
+.context-event-detail {
+  color: #8b949e;
+  word-break: break-word;
+}
+
 .chat-job-card {
   margin-top: 0.65rem;
   background: #0d1117;

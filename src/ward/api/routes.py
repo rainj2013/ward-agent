@@ -355,6 +355,7 @@ async def sse_format(chunk: dict, conversation_id: int) -> str:
         "thinking": chunk.get("thinking"),
         "tool_call": chunk.get("tool_call"),
         "tool_result": _compact_tool_result(chunk.get("tool_result")),
+        "context_event": chunk.get("context_event"),
         "job": chunk.get("job"),
         "assistant_message_id": chunk.get("assistant_message_id"),
         "done": chunk.get("done", False),
@@ -418,17 +419,35 @@ def _detect_stock_comparison_intent(message: str) -> dict[str, Any] | None:
     return {"symbols": valid_symbols, "objective": message.strip()}
 
 
-def _build_chat_agent(conversation_id: int) -> WardMiniAgent:
+def _build_chat_agent(conversation_id: int) -> tuple[WardMiniAgent, dict]:
     agent = WardMiniAgent()
-    history = hs.conversations.get_messages(conversation_id, limit=20)
-    agent.load_conversation_history(history)
-    return agent
+    summary = hs.conversations.get_summary(conversation_id)
+    if summary and summary.get("summarized_until_message_id"):
+        summarized_until = int(summary["summarized_until_message_id"])
+        history = [
+            msg
+            for msg in hs.conversations.get_messages(conversation_id, limit=None)
+            if int(msg.get("id") or 0) > summarized_until
+        ][-20:]
+    else:
+        history = hs.conversations.get_messages(conversation_id, limit=20)
+    load_event = agent.load_conversation_history(history, summary=summary)
+    return agent, load_event
+
+
+async def _update_summary_background(conversation_id: int) -> None:
+    """Update persistent chat summary without blocking the client stream."""
+    try:
+        agent = WardMiniAgent()
+        await agent.update_persistent_summary(conversation_id, hs.conversations)
+    except Exception as exc:
+        print(f"[Ward] background summary update failed for conversation {conversation_id}: {exc}")
 
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     """Send a chat message and get AI response (non-streaming)."""
     conversation_id = req.conversation_id or hs.conversations.create_conversation()
-    agent = _build_chat_agent(conversation_id)
+    agent, _load_event = _build_chat_agent(conversation_id)
     hs.conversations.add_message(conversation_id, "user", req.message)
     final_reply = ""
     async for chunk in agent.chat_stream(conversation_id, req.message, req.context):
@@ -438,6 +457,7 @@ async def chat(req: ChatRequest):
             break
     if final_reply:
         hs.conversations.add_message(conversation_id, "assistant", final_reply)
+        asyncio.create_task(_update_summary_background(conversation_id))
     return ChatResponse(
         ok=True,
         conversation_id=conversation_id,
@@ -451,7 +471,7 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     """Send a chat message and stream AI response chunks via SSE."""
     conversation_id = req.conversation_id or hs.conversations.create_conversation()
-    agent = _build_chat_agent(conversation_id)
+    agent, load_event = _build_chat_agent(conversation_id)
     hs.conversations.add_message(conversation_id, "user", req.message)
     cancel_event = _get_or_create_cancel_event(conversation_id)
 
@@ -459,6 +479,7 @@ async def chat_stream(req: ChatRequest):
         reply_parts: list[str] = []
         try:
             yield await sse_format({"conversation_id": conversation_id}, conversation_id)
+            yield await sse_format({"conversation_id": conversation_id, "context_event": load_event}, conversation_id)
             comparison = _detect_stock_comparison_intent(req.message)
             if comparison:
                 job = await ajs.create_job("stock_comparison", comparison)
@@ -492,12 +513,22 @@ async def chat_stream(req: ChatRequest):
                     break
                 if chunk.get("chunk"):
                     reply_parts.append(chunk["chunk"])
-                yield await sse_format(chunk, conversation_id)
                 if chunk.get("done"):
                     reply = "".join(reply_parts).strip()
                     if reply:
                         hs.conversations.add_message(conversation_id, "assistant", reply)
+                    asyncio.create_task(_update_summary_background(conversation_id))
+                    summary_event = {
+                        "type": "summary_skip",
+                        "message": "摘要更新已转入后台，不阻塞本轮回答完成。",
+                    }
+                    yield await sse_format(
+                        {"conversation_id": conversation_id, "context_event": summary_event},
+                        conversation_id,
+                    )
+                    yield await sse_format(chunk, conversation_id)
                     break
+                yield await sse_format(chunk, conversation_id)
         except asyncio.CancelledError:
             # Fetch was aborted by client (e.g. user clicked cancel) — signal done
             yield f"data: {json.dumps({'ok': True, 'done': True, 'cancelled': True})}\n\n"
