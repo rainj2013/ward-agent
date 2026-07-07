@@ -15,6 +15,7 @@ from anthropic import Anthropic
 
 from ward.core.config import get_config
 from ward.services.db.analysis_cache_service import AnalysisCacheService
+from ward.services.stock_symbols import normalize_stock_symbol
 
 
 # Extended stock list for search
@@ -27,6 +28,7 @@ POPULAR_STOCKS = {
     "META": "Meta Platforms Inc.",
     "TSLA": "Tesla Inc.",
     "AMD": "Advanced Micro Devices",
+    "MU": "Micron Technology Inc.",
     "NFLX": "Netflix Inc.",
     "AVGO": "Broadcom Inc.",
     "COST": "Costco Wholesale",
@@ -638,12 +640,24 @@ Forward P/E: {quote_data.get('forward_pe', '无数据') if quote_data else '无�
                 self._cache.set(cache_key, report, context)
 
     def search(self, query: str) -> dict[str, Any]:
-        """Search stocks by symbol or name."""
-        query = query.upper()
+        """Search known stocks by name and accept arbitrary ticker symbols."""
+        query = query.strip()
+        if not query:
+            return {"ok": True, "results": []}
+
+        normalized_query = query.upper()
         results = []
         for symbol, name in POPULAR_STOCKS.items():
-            if query in symbol or query.upper() in name.upper():
+            if normalized_query in symbol or normalized_query in name.upper():
                 results.append({"symbol": symbol, "name": name})
+
+        # The popular-stock map improves name search, but must not constrain
+        # direct ticker lookup. Quote retrieval remains the source of truth for
+        # whether an arbitrary ticker actually exists.
+        symbol = normalize_stock_symbol(query)
+        if symbol and not results:
+            results.insert(0, {"symbol": symbol, "name": POPULAR_STOCKS.get(symbol, symbol)})
+
         return {"ok": True, "results": results}
 
     def get_quote(self, symbol: str) -> dict[str, Any]:
