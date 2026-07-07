@@ -9,7 +9,7 @@ Ward is a US stock market data analysis tool with a Web UI. It provides real-tim
 - **Backend**: FastAPI + SQLite
 - **Frontend**: Vanilla HTML/CSS/JS (no framework)
 - **Data sources**: akshare (East Money/Sina) + yfinance (Yahoo Finance)
-- **AI**: MiniMax API (Anthropic-compatible) via mini-agent framework
+- **AI**: Configurable Anthropic-compatible API via mini-agent framework
 
 ## Running the Project
 
@@ -18,15 +18,15 @@ Ward is a US stock market data analysis tool with a Web UI. It provides real-tim
 uv sync
 
 # Run the web server
-uv run ward
+uv run python run.py
 
 # Access at http://localhost:8000 (or http://127.0.0.1:8000)
 ```
 
-Environment variables (set in `.env`):
-- `MINIMAX_API_KEY` (required) — MiniMax API key
-- `LLM_MODEL` (optional, default `MiniMax-M2.7-highspeed`)
-- `ANTHROPIC_BASE_URL` (optional)
+Configuration in the project `.env`:
+- `ANTHROPIC_AUTH_TOKEN` — API key
+- `LLM_MODEL` (optional, default `deepseek-v4-flash`)
+- `ANTHROPIC_BASE_URL` (optional, default DeepSeek Anthropic-compatible endpoint)
 - `WEB_PORT` (optional, default `8000`)
 - `PUBLIC_MODE=1` — bind to `0.0.0.0` for external access
 
@@ -39,8 +39,7 @@ src/ward/
 ├── core/
 │   ├── config.py             # Config loading from .env via dotenv
 │   └── data_fetcher.py       # Unified data fetching (akshare + yfinance)
-├── api/
-│   └── routes.py             # All FastAPI routes + SSE streaming helpers
+├── api/                      # Page, market, stock, job, settings, chat, and SSE routers
 ├── schemas/
 │   └── models.py             # Pydantic request/response models + ChatContext
 ├── services/

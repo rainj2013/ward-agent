@@ -43,6 +43,8 @@ class OpenAIClient(LLMClientBase):
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=api_base,
+            timeout=60.0,
+            max_retries=0,
         )
 
     async def _make_api_request(

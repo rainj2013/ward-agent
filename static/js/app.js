@@ -17,7 +17,6 @@ const _indexKlineCache = {};    // prefix -> [{date, open, high, low, close, vol
 const _stockKlineCache = {};    // symbol -> [{date, open, high, low, close, volume}, ...]
 const _stockAnalysisCache = {}; // symbol -> string (AI analysis text)
 let _indexAnalysisCache = {};   // prefix -> string (index AI analysis text)
-let _runtimeStatsRange = '1d';
 
 const THEME_STORAGE_KEY = 'ward_theme';
 const DEFAULT_THEME = 'graphite';
@@ -757,199 +756,6 @@ function pollChatJobResult(job, replyContent, getIntroText, options = {}) {
   }, 1000);
 }
 
-async function loadRuntimeStats(range = _runtimeStatsRange, btn = null) {
-  _runtimeStatsRange = range;
-  document.querySelectorAll('.runtime-range-btn').forEach(el => {
-    el.classList.toggle('active', el.dataset.range === range);
-  });
-  if (btn) btn.classList.add('active');
-
-  const container = document.getElementById('runtime-stats');
-  if (!container) return;
-  container.innerHTML = '<div class="runtime-muted">加载运行统计中...</div>';
-
-  try {
-    const resp = await fetch(`/api/runtime/stats?range=${encodeURIComponent(range)}`);
-    const data = await resp.json();
-    if (!data.ok) throw new Error(data.error || '统计加载失败');
-    renderRuntimeStats(data.stats);
-  } catch (e) {
-    container.innerHTML = `<div class="runtime-muted">统计加载失败：${escapeHtml(e.message)}</div>`;
-  }
-}
-
-function loadRuntimeJobFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const jobId = params.get('job_id');
-  if (!jobId) return;
-  const input = document.getElementById('runtime-job-input');
-  if (input) input.value = jobId;
-  loadRuntimeTrace();
-}
-
-function renderRuntimeStats(stats) {
-  const container = document.getElementById('runtime-stats');
-  if (!container) return;
-  const items = [
-    ['任务数', stats.jobs_total],
-    ['成功 / 失败', `${stats.jobs_succeeded} / ${stats.jobs_failed}`],
-    ['缓存命中率', `${Math.round((stats.cache_hit_rate || 0) * 100)}%`],
-    ['LLM 调用', stats.llm_calls],
-    ['Tokens', fmtRuntimeNumber(stats.total_tokens)],
-    ['平均耗时', formatDurationMs(stats.avg_duration_ms)],
-  ];
-  container.innerHTML = items.map(([label, value]) => `
-    <div class="runtime-stat">
-      <div class="runtime-stat-label">${escapeHtml(label)}</div>
-      <div class="runtime-stat-value">${escapeHtml(String(value ?? '--'))}</div>
-    </div>
-  `).join('');
-}
-
-async function loadRuntimeTrace() {
-  const input = document.getElementById('runtime-job-input');
-  const container = document.getElementById('runtime-trace');
-  if (!input || !container) return;
-  const jobId = input.value.trim();
-  if (!jobId) {
-    container.innerHTML = '<div class="runtime-muted">请输入 job id。</div>';
-    return;
-  }
-  container.innerHTML = '<div class="runtime-muted">加载 trace 中...</div>';
-
-  try {
-    const resp = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/trace`);
-    const data = await resp.json();
-    if (!data.ok) throw new Error(data.error || 'Trace 加载失败');
-    renderRuntimeTrace(data.job, data.events || []);
-  } catch (e) {
-    container.innerHTML = `<div class="runtime-muted">Trace 加载失败：${escapeHtml(e.message)}</div>`;
-  }
-}
-
-function renderRuntimeTrace(job, events) {
-  const container = document.getElementById('runtime-trace');
-  if (!container) return;
-  const usage = job.usage || {};
-  const summary = [
-    ['状态', job.status],
-    ['类型', job.type],
-    ['耗时', formatDurationMs(job.duration_ms)],
-    ['Tokens', fmtRuntimeNumber(usage.total_tokens || 0)],
-  ].map(([label, value]) => `
-    <div class="runtime-stat">
-      <div class="runtime-stat-label">${escapeHtml(label)}</div>
-      <div class="runtime-stat-value">${escapeHtml(String(value ?? '--'))}</div>
-    </div>
-  `).join('');
-
-  const teamOverview = renderRuntimeTeamOverview(job, events);
-  const eventHtml = events.map(ev => {
-    const data = ev.data ? JSON.stringify(ev.data, null, 2) : '';
-    return `
-      <div class="runtime-event">
-        <div class="runtime-event-time">${escapeHtml(formatTraceTime(ev.created_at))}</div>
-        <div class="runtime-event-stage">${escapeHtml(ev.stage || ev.event || '--')}</div>
-        <div class="runtime-event-message">${escapeHtml(ev.message || '')}</div>
-        <div class="runtime-event-duration">${escapeHtml(formatDurationMs(ev.duration_ms))}</div>
-        ${renderRuntimeEventData(data)}
-      </div>
-    `;
-  }).join('');
-
-  container.innerHTML = `
-    <div class="runtime-trace-summary">${summary}</div>
-    ${teamOverview}
-    ${eventHtml || '<div class="runtime-muted">暂无事件。</div>'}
-  `;
-}
-
-function renderRuntimeEventData(data) {
-  if (!data) return '';
-  const lineCount = data.split('\n').length;
-  const shouldCollapse = data.length > 1200 || lineCount > 24;
-  if (!shouldCollapse) {
-    return `<pre class="runtime-event-data">${escapeHtml(data)}</pre>`;
-  }
-  return `<details class="runtime-event-data runtime-event-data-collapsed">
-    <summary>报文较长，点击展开 · ${lineCount} 行 · ${fmtRuntimeNumber(data.length)} 字符</summary>
-    <pre>${escapeHtml(data)}</pre>
-  </details>`;
-}
-
-function renderRuntimeTeamOverview(job, events) {
-  if (!job || job.type !== 'stock_comparison') return '';
-
-  const plan = events.find(ev => ev.event === 'leader_plan');
-  const workers = events.filter(ev => ev.event === 'worker_done');
-  const synthesisStart = events.find(ev => ev.stage === 'leader_synthesis' && ev.event === 'llm_call_start');
-  const synthesisEnd = events.find(ev => ev.stage === 'leader_synthesis' && ev.event === 'llm_call_end');
-  const verification = events.find(ev => ev.event === 'verification_passed' || ev.event === 'verification_failed');
-  const symbols = plan && plan.data && plan.data.symbols
-    ? plan.data.symbols.join(' / ')
-    : ((job.payload && job.payload.symbols) || []).join(' / ');
-
-  const workerHtml = workers.length ? workers.map(ev => {
-    const data = ev.data || {};
-    const ok = data.ok !== false;
-    const symbol = data.symbol || '--';
-    const trend = data.trend && data.trend.status ? data.trend.status : '--';
-    const klineCount = data.data_quality && data.data_quality.kline_count !== undefined ? data.data_quality.kline_count : '--';
-    return `<div class="runtime-team-worker ${ok ? 'ok' : 'error'}">
-      <div class="runtime-team-worker-symbol">${escapeHtml(symbol)}</div>
-      <div class="runtime-team-worker-meta">${ok ? '完成' : '失败'} · 趋势 ${escapeHtml(String(trend))} · K线 ${escapeHtml(String(klineCount))}</div>
-    </div>`;
-  }).join('') : '<div class="runtime-muted">Worker 尚未完成。</div>';
-
-  const verifierData = verification && verification.data ? verification.data : null;
-  const verifierPassed = verifierData ? verifierData.passed : null;
-  const warnings = verifierData && verifierData.warnings ? verifierData.warnings : [];
-  const errors = verifierData && verifierData.errors ? verifierData.errors : [];
-
-  return `<div class="runtime-team">
-    <div class="runtime-team-title">Team Overview${symbols ? ` · ${escapeHtml(symbols)}` : ''}</div>
-    <div class="runtime-team-grid">
-      <div class="runtime-team-card">
-        <div class="runtime-team-card-label">Leader</div>
-        <div class="runtime-team-card-value">${plan ? '计划已生成' : '等待计划'}</div>
-        <div class="runtime-team-card-note">${synthesisEnd ? '聚合完成' : synthesisStart ? '正在聚合' : '等待 Worker'}</div>
-      </div>
-      <div class="runtime-team-card runtime-team-workers-card">
-        <div class="runtime-team-card-label">Workers</div>
-        <div class="runtime-team-workers">${workerHtml}</div>
-      </div>
-      <div class="runtime-team-card ${verifierPassed === false ? 'error' : verifierPassed === true ? 'ok' : ''}">
-        <div class="runtime-team-card-label">Verifier</div>
-        <div class="runtime-team-card-value">${verifierPassed === true ? '验证通过' : verifierPassed === false ? '验证失败' : '等待验证'}</div>
-        ${errors.length ? `<div class="runtime-team-card-note error">${escapeHtml(errors.join('；'))}</div>` : ''}
-        ${warnings.length ? `<div class="runtime-team-card-note">${escapeHtml(warnings.join('；'))}</div>` : ''}
-      </div>
-    </div>
-  </div>`;
-}
-
-function refreshRuntimePanel() {
-  loadRuntimeStats(_runtimeStatsRange);
-}
-
-function formatDurationMs(ms) {
-  if (ms === null || ms === undefined) return '--';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function fmtRuntimeNumber(value) {
-  if (value === null || value === undefined) return '--';
-  return Number(value).toLocaleString('en-US');
-}
-
-function formatTraceTime(value) {
-  if (!value) return '--';
-  const d = new Date(value + (value.endsWith('Z') ? '' : 'Z'));
-  if (Number.isNaN(d.getTime())) return value.slice(11, 19);
-  return d.toLocaleTimeString('zh-CN', { hour12: false });
-}
-
 function formatAnalysisJobStatus(data) {
   const eventData = data.data || {};
   const job = data.job || {};
@@ -1361,7 +1167,7 @@ async function sendChat() {
             _lastThinking = null;
           }
           fullReply += data.chunk;
-          replyContent.innerHTML = (typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply))
+          replyContent.innerHTML = renderMarkdown(fullReply)
             + (activeJob ? renderChatJobCard(activeJob) : '');
           container.scrollTop = container.scrollHeight;
         }
@@ -1375,7 +1181,7 @@ async function sendChat() {
             cancelNotice.textContent = '⚠️ 已取消';
             answerDiv.insertAdjacentElement('afterbegin', cancelNotice);
           } else {
-            replyContent.innerHTML = (typeof marked !== 'undefined' ? marked.parse(fullReply) : escapeHtml(fullReply))
+            replyContent.innerHTML = renderMarkdown(fullReply)
               + (activeJob ? renderChatJobCard(activeJob) : '');
           }
           conversationId = convId;
@@ -1460,17 +1266,17 @@ function handleIndexAnalyze(prefix, name, btn) {
     btn.textContent = '分析中...';
     btn.disabled = true;
     container.style.display = 'block';
-    container.innerHTML = '<h3>' + name + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
+    container.innerHTML = '<h3>' + escapeHtml(name) + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
     runAnalysisJob(
       '/api/analysis-jobs/index/' + prefix,
       (message, data) => {
         const jobId = data && data.job ? data.job.id : null;
-        renderAnalysisStatus(container, '<h3>' + name + ' 分析报告</h3>', message, jobId);
+        renderAnalysisStatus(container, '<h3>' + escapeHtml(name) + ' 分析报告</h3>', message, jobId);
        },
        (report, result, job) => {
          btn.textContent = '分析';
         btn.disabled = false;
-        renderAnalysisReport(container, '<h3>' + name + ' 分析报告</h3>', report, job && job.id);
+        renderAnalysisReport(container, '<h3>' + escapeHtml(name) + ' 分析报告</h3>', report, job && job.id);
         if (!_indexAnalysisCache) _indexAnalysisCache = {};
         _indexAnalysisCache[prefix] = report;
       }
@@ -1478,7 +1284,7 @@ function handleIndexAnalyze(prefix, name, btn) {
       .catch(err => {
         btn.textContent = '分析';
         btn.disabled = false;
-        container.innerHTML = '<h3>分析报告</h3><div class="stock-error">请求失败: ' + err.message + '</div>';
+        container.innerHTML = '<h3>分析报告</h3><div class="stock-error">请求失败: ' + escapeHtml(err.message) + '</div>';
         container.style.display = 'block';
       });
   }
@@ -1494,24 +1300,24 @@ function handleAnalyzeAction(symbol, name, btn) {
     btn.textContent = '分析中...';
     btn.disabled = true;
     container.style.display = 'block';
-    container.innerHTML = '<h3>' + name + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
+    container.innerHTML = '<h3>' + escapeHtml(name) + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
     runAnalysisJob(
       `/api/analysis-jobs/stock/${symbol}`,
       (message, data) => {
         const jobId = data && data.job ? data.job.id : null;
-        renderAnalysisStatus(container, '<h3>' + name + ' 分析报告</h3>', message, jobId);
+        renderAnalysisStatus(container, '<h3>' + escapeHtml(name) + ' 分析报告</h3>', message, jobId);
        },
        (report, result, job) => {
          btn.textContent = '分析';
         btn.disabled = false;
-        renderAnalysisReport(container, '<h3>' + name + ' 分析报告</h3>', report, job && job.id);
+        renderAnalysisReport(container, '<h3>' + escapeHtml(name) + ' 分析报告</h3>', report, job && job.id);
         _stockAnalysisCache[symbol] = report;
       }
     )
       .catch(err => {
         btn.textContent = '分析';
         btn.disabled = false;
-        container.innerHTML = '<h3>分析报告（' + symbol + '）</h3><div class="stock-error">请求失败: ' + err.message + '</div>';
+        container.innerHTML = '<h3>分析报告（' + escapeHtml(symbol) + '）</h3><div class="stock-error">请求失败: ' + escapeHtml(err.message) + '</div>';
         container.style.display = 'block';
       });
   }
@@ -1541,7 +1347,7 @@ function handleAnalyzeAction(symbol, name, btn) {
         renderStockChart(container, symbol, name, data.data);
       })
       .catch(err => {
-        container.innerHTML = '<div class="stock-error">请求失败: ' + err.message + '</div>';
+        container.innerHTML = '<div class="stock-error">请求失败: ' + escapeHtml(err.message) + '</div>';
       });
   }
 
@@ -1553,11 +1359,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadMarketData();
     loadExtendedHours();
   }
-  if (document.getElementById('runtime-stats')) {
-    loadRuntimeStats('1d');
-    loadRuntimeJobFromUrl();
-  }
-
   // Delegated button clicks — data-action buttons inside stock cards
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');
@@ -1617,7 +1418,7 @@ async function searchStock() {
       results.appendChild(card);
     }
   } catch (e) {
-    results.innerHTML = `<div class="stock-error">搜索失败: ${e.message}</div>`;
+    results.innerHTML = `<div class="stock-error">搜索失败: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -1639,7 +1440,7 @@ async function loadStockQuote(symbol, name, card) {
     if (!data.ok || !data.data) {
       card.innerHTML = `<div class="stock-result-header">
         <span class="stock-result-symbol">${symbol}</span>
-        <span class="stock-result-name">${name}</span>
+        <span class="stock-result-name">${escapeHtml(name)}</span>
       </div><div class="stock-error">加载失败: ${data.error || '网络错误'}</div>`;
       return;
     }
@@ -1663,7 +1464,7 @@ async function loadStockQuote(symbol, name, card) {
       <div>
         <div class="stock-result-header">
           <span class="stock-result-symbol">${symbol}</span>
-          <span class="stock-result-name">${name}</span>
+          <span class="stock-result-name">${escapeHtml(name)}</span>
         </div>
         <div class="stock-tags"><span>美股</span><span>实时行情</span></div>
       </div>
@@ -1681,8 +1482,8 @@ async function loadStockQuote(symbol, name, card) {
       </div>
     </div>
     <div class="stock-result-actions">
-      <button class="stock-chart-btn active" data-action="chart" data-symbol="${symbol}" data-name="${name}">K线</button>
-      <button class="stock-analyze-btn" data-action="analyze" data-symbol="${symbol}" data-name="${name}">分析</button>
+      <button class="stock-chart-btn active" data-action="chart" data-symbol="${escapeHtml(symbol)}" data-name="${escapeHtml(name)}">K线</button>
+      <button class="stock-analyze-btn" data-action="analyze" data-symbol="${escapeHtml(symbol)}" data-name="${escapeHtml(name)}">分析</button>
     </div>
     <div id="chart-${symbol}" class="stock-chart-container" style="display:none"></div>
     <div id="analysis-${symbol}" class="stock-analysis-card" style="display:none"></div>`;
@@ -1718,13 +1519,13 @@ async function loadStockQuote(symbol, name, card) {
 
     if (analysisVisible && analysisReport) {
       newAnalysisEl.style.display = 'block';
-      newAnalysisEl.innerHTML = `<h3>${symbol} 分析报告</h3><div class="stock-analysis-content">${typeof marked !== 'undefined' ? marked.parse(analysisReport) : escapeHtml(analysisReport)}</div>`;
+      newAnalysisEl.innerHTML = `<h3>${escapeHtml(symbol)} 分析报告</h3><div class="stock-analysis-content">${renderMarkdown(analysisReport)}</div>`;
     } else if (analysisVisible && analysisContent) {
       newAnalysisEl.style.display = 'block';
       newAnalysisEl.innerHTML = analysisContent;
     }
   } catch (e) {
-    card.innerHTML = `<div class="stock-error">请求失败: ${e.message}</div>`;
+    card.innerHTML = `<div class="stock-error">请求失败: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -1737,13 +1538,13 @@ async function loadStockAnalysis(symbol, name, btn) {
   btn.textContent = '分析中...';
   btn.disabled = true;
   container.style.display = 'block';
-    container.innerHTML = '<h3>' + name + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
+    container.innerHTML = '<h3>' + escapeHtml(name) + ' 分析报告</h3><div class="stock-analysis-content"><p class="hint">分析任务排队中...</p></div>';
   try {
     await runAnalysisJob(
       `/api/analysis-jobs/stock/${symbol}`,
       (message, data) => {
         const jobId = data && data.job ? data.job.id : null;
-        renderAnalysisStatus(container, '<h3>' + name + ' 分析报告</h3>', message, jobId);
+        renderAnalysisStatus(container, '<h3>' + escapeHtml(name) + ' 分析报告</h3>', message, jobId);
        },
        (report, result, job) => {
          btn.textContent = '分析';
@@ -1751,20 +1552,12 @@ async function loadStockAnalysis(symbol, name, btn) {
       }
     );
   } catch (e) {
-    container.innerHTML = `<h3>分析报告（${symbol}）</h3><div class="stock-error">请求失败: ${e.message}</div>`;
+    container.innerHTML = `<h3>分析报告（${escapeHtml(symbol)}）</h3><div class="stock-error">请求失败: ${escapeHtml(e.message)}</div>`;
     container.style.display = 'block';
   } finally {
     btn.textContent = '分析';
     btn.disabled = false;
   }
-}
-
-function escapeHtml(text) {
-  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-function renderMarkdown(text) {
-  return typeof marked !== 'undefined' ? marked.parse(text) : escapeHtml(text);
 }
 
 function keepStreamingOutputInView(container) {
@@ -1808,7 +1601,7 @@ async function toggleStockChart(symbol, name, btn) {
     // Cache raw kline data for chat context
     _stockKlineCache[symbol] = data.data;
   } catch (e) {
-    container.innerHTML = `<div class="stock-error">请求失败: ${e.message}</div>`;
+    container.innerHTML = `<div class="stock-error">请求失败: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -2081,7 +1874,7 @@ async function toggleIndexChart(prefix, name) {
     // Cache raw kline data for chat context
     _indexKlineCache[prefix] = data.data;
   } catch (e) {
-    overlayContent.innerHTML = '<div class="stock-error">请求失败: ' + e.message + '</div>';
+    overlayContent.innerHTML = '<div class="stock-error">请求失败: ' + escapeHtml(e.message) + '</div>';
   }
 }
 

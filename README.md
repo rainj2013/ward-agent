@@ -110,14 +110,7 @@ Ward 从项目根目录的 `.env` 加载配置。API Key 按 `ANTHROPIC_AUTH_TOK
 
 ```bash
 uv sync
-uv run ward
-```
-
-或直接用 pip：
-
-```bash
-pip install -e .
-ward
+uv run python run.py
 ```
 
 ### 4. 访问
@@ -153,9 +146,10 @@ Ward 提供 REST API，可以接入任何 AI Agent（Hermes、OpenClaw、Claude 
 ```
 ward-agent/
 ├── src/ward/
-│   ├── api/routes.py          # FastAPI 路由
+│   ├── api/                   # 按市场、股票、任务、设置和聊天拆分的路由
 │   ├── core/
-│   │   ├── config.py          # 配置管理（dotenv）
+│   │   ├── config.py          # .env 配置管理
+│   │   ├── llm.py             # 统一 LLM 客户端和调用协议
 │   │   └── data_fetcher.py    # 数据抓取（akshare + yfinance）
 │   ├── schemas/models.py      # Pydantic 模型
 │   ├── services/
@@ -165,18 +159,19 @@ ward-agent/
 │   │   ├── stock_service.py   # 个股行情
 │   │   ├── report_service.py  # AI 报告生成
 │   │   └── db/
+│   │       ├── connection.py            # SQLite 连接策略
 │   │       └── conversation_service.py  # SQLite 聊天历史
 │   └── app.py                 # FastAPI 应用入口
 └── static/
     ├── index.html              # 前端页面
-    ├── css/style.css           # 样式
-    └── js/app.js              # 前端逻辑
+    ├── css/                    # 通用及页面样式
+    └── js/                     # 主页面、Runtime、设置与安全渲染脚本
 ```
 
 - **后端**：FastAPI + SQLite
 - **前端**：原生 HTML/CSS/JS（无框架依赖）
 - **数据源**：akshare + yfinance
-- **AI**：MiniMax API（Anthropic 兼容模式）
+- **AI**：Anthropic 兼容 API（Base URL、Key 和模型可配置）
 
 ---
 

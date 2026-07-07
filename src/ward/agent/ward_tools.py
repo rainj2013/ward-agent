@@ -1,5 +1,6 @@
 """Ward market data tools — Mini-Agent Tool subclasses."""
 
+import asyncio
 import json
 from typing import Any
 
@@ -35,7 +36,7 @@ class GetStockQuoteTool(Tool):
 
         sym = symbol.upper()
         ss = StockService()
-        result = ss.get_quote(sym)
+        result = await asyncio.to_thread(ss.get_quote, sym)
         if result.get("ok"):
             d = result["data"]
             return ToolResult(
@@ -91,7 +92,7 @@ class GetStockKlineTool(Tool):
 
         sym = symbol.upper()
         ss = StockService()
-        result = ss.get_kline(sym, days)
+        result = await asyncio.to_thread(ss.get_kline, sym, days)
         if result.get("ok"):
             return ToolResult(
                 success=True,
@@ -126,7 +127,7 @@ class GetStockAnalyzeTool(Tool):
 
         sym = symbol.upper()
         ss = StockService()
-        result = ss.generate_analysis(sym)
+        result = await asyncio.to_thread(ss.generate_analysis, sym)
         if result.get("ok"):
             return ToolResult(
                 success=True,
@@ -174,7 +175,7 @@ class GetIndexAnalyzeTool(Tool):
         from ward.services.index_service import IndexService
 
         is_ = IndexService()
-        result = is_.generate_analysis(prefix)
+        result = await asyncio.to_thread(is_.generate_analysis, prefix)
         if result.get("ok"):
             return ToolResult(
                 success=True,
@@ -227,7 +228,7 @@ class GetIndexKlineTool(Tool):
         from ward.services.index_service import IndexService
 
         is_ = IndexService()
-        result = is_.get_kline(prefix, days)
+        result = await asyncio.to_thread(is_.get_kline, prefix, days)
         if result.get("ok"):
             return ToolResult(
                 success=True,
@@ -264,7 +265,7 @@ class GetMarketOverviewTool(Tool):
         from ward.services.nasdaq_service import MarketService
 
         ms = MarketService()
-        result = ms.get_market_overview()
+        result = await asyncio.to_thread(ms.get_market_overview)
         return ToolResult(success=True, content=json.dumps(result, ensure_ascii=False, default=str))
 
 
@@ -295,7 +296,7 @@ class GetExtendedHoursTool(Tool):
     async def execute(self, symbol: str = "", **kwargs) -> ToolResult:
         from ward.services.stock_service import StockService
 
-        result = StockService().get_extended_price(symbol)
+        result = await asyncio.to_thread(StockService().get_extended_price, symbol)
         if result.get("ok"):
             return ToolResult(
                 success=True,

@@ -7,28 +7,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import perf_counter
 from typing import Any
 
-from anthropic import Anthropic
 
 from ward.core.config import get_config
+from ward.core.llm import complete_text, create_anthropic_client
 from ward.services.db.analysis_cache_service import AnalysisCacheService
 from ward.services.stock_service import POPULAR_STOCKS, StockService
 from ward.services.stock_symbols import normalize_stock_symbol
-
-
-def _extract_llm_usage(response: Any) -> dict[str, Any]:
-    raw = getattr(response, "usage", None)
-    input_tokens = int(getattr(raw, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(raw, "output_tokens", 0) or 0)
-    cache_read = int(getattr(raw, "cache_read_input_tokens", 0) or 0)
-    cache_creation = int(getattr(raw, "cache_creation_input_tokens", 0) or 0)
-    total_input = input_tokens + cache_read + cache_creation
-    return {
-        "provider": "anthropic-compatible",
-        "model": get_config().llm.model,
-        "input_tokens": total_input,
-        "output_tokens": output_tokens,
-        "total_tokens": total_input + output_tokens,
-    }
 
 
 class StockComparisonService:
@@ -59,8 +43,7 @@ class StockComparisonService:
 [给出排序，但必须说明这是基于已提供数据的相对排序，不是确定性投资建议]"""
 
     def __init__(self):
-        cfg = get_config()
-        self._client = Anthropic(api_key=cfg.llm.api_key, base_url=cfg.llm.base_url)
+        self._client = create_anthropic_client()
         self._cache = AnalysisCacheService()
 
     def generate_comparison(
@@ -141,14 +124,9 @@ class StockComparisonService:
                         "messages": [{"role": "user", "content": prompt}],
                     },
                 )
-            response = self._client.messages.create(
-                model=get_config().llm.model,
-                max_tokens=5000,
-                system=self.SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
+            report, usage = complete_text(
+                self._client, system=self.SYSTEM_PROMPT, prompt=prompt, max_tokens=5000
             )
-            report = "\n".join(block.text if hasattr(block, "text") else "" for block in response.content)
-            usage = _extract_llm_usage(response)
             if trace:
                 trace(
                     "llm_call_end",

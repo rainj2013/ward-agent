@@ -11,9 +11,9 @@ from typing import Any
 import akshare as ak
 import pandas as pd
 import yfinance as yf
-from anthropic import Anthropic
 
 from ward.core.config import get_config
+from ward.core.llm import complete_text, create_anthropic_client, stream_text
 from ward.services.db.analysis_cache_service import AnalysisCacheService
 
 # Supported indices: (yfinance_symbol, display_name, description)
@@ -24,23 +24,6 @@ SUPPORTED_INDICES = {
     "^DJI": ("Dow Jones", "道琼斯工业指数", "美国传统蓝筹股指数"),
     "GC=F": ("Gold", "黄金期货", "全球避险资产和通胀对冲工具"),
 }
-
-
-def _extract_llm_usage(response: Any) -> dict[str, Any]:
-    """Normalize Anthropic-compatible usage metadata for runtime stats."""
-    raw = getattr(response, "usage", None)
-    input_tokens = int(getattr(raw, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(raw, "output_tokens", 0) or 0)
-    cache_read = int(getattr(raw, "cache_read_input_tokens", 0) or 0)
-    cache_creation = int(getattr(raw, "cache_creation_input_tokens", 0) or 0)
-    total_input = input_tokens + cache_read + cache_creation
-    return {
-        "provider": "anthropic-compatible",
-        "model": get_config().llm.model,
-        "input_tokens": total_input,
-        "output_tokens": output_tokens,
-        "total_tokens": total_input + output_tokens,
-    }
 
 
 class IndexService:
@@ -107,8 +90,7 @@ class IndexService:
 注意：所有数据必须来自提供的市场数据，不要编造数字。报告用中文撰写，突出重点，不要废话。"""
 
     def __init__(self):
-        cfg = get_config()
-        self._client = Anthropic(api_key=cfg.llm.api_key, base_url=cfg.llm.base_url)
+        self._client = create_anthropic_client()
         self._cache = AnalysisCacheService()
 
     def _calc_rsi(self, prices: pd.Series, period: int = 14) -> float | None:
@@ -538,17 +520,12 @@ class IndexService:
                         "messages": [{"role": "user", "content": user_prompt}],
                     },
                 )
-            response = self._client.messages.create(
-                model=get_config().llm.model,
-                max_tokens=6000,
+            text, usage = complete_text(
+                self._client,
                 system="你是一个专业的宏观策略分析师，擅长分析美国股市技术面和宏观走势。",
-                messages=[{"role": "user", "content": user_prompt}],
+                prompt=user_prompt,
+                max_tokens=6000,
             )
-            text = "\n".join(
-                block.text if hasattr(block, "text") else ""
-                for block in response.content
-            )
-            usage = _extract_llm_usage(response)
             if trace:
                 trace(
                     "llm_call_end",
@@ -687,15 +664,14 @@ class IndexService:
 
         text = ""
         try:
-            with self._client.messages.stream(
-                model=get_config().llm.model,
-                max_tokens=6000,
+            for chunk in stream_text(
+                self._client,
                 system="你是一个专业的宏观策略分析师，擅长分析美国股市技术面和宏观走势。",
-                messages=[{"role": "user", "content": user_prompt}],
-            ) as stream:
-                for chunk in stream.text_stream:
-                    text += chunk
-                    yield {"ok": True, "prefix": prefix, "name": chn_name, "chunk": chunk}
+                prompt=user_prompt,
+                max_tokens=6000,
+            ):
+                text += chunk
+                yield {"ok": True, "prefix": prefix, "name": chn_name, "chunk": chunk}
             yield {"ok": True, "prefix": prefix, "name": chn_name, "report": text, "data": context, "done": True}
         except Exception as e:
             yield {"ok": False, "error": str(e), "data": context, "done": True}
@@ -855,17 +831,9 @@ class IndexService:
                         "messages": [{"role": "user", "content": user_prompt}],
                     },
                 )
-            response = self._client.messages.create(
-                model=get_config().llm.model,
-                max_tokens=6000,
-                system=self.GOLD_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
+            text, usage = complete_text(
+                self._client, system=self.GOLD_SYSTEM_PROMPT, prompt=user_prompt, max_tokens=6000
             )
-            text = "\n".join(
-                block.text if hasattr(block, "text") else ""
-                for block in response.content
-            )
-            usage = _extract_llm_usage(response)
             if trace:
                 trace(
                     "llm_call_end",
@@ -996,15 +964,11 @@ class IndexService:
 
         text = ""
         try:
-            with self._client.messages.stream(
-                model=get_config().llm.model,
-                max_tokens=6000,
-                system=self.GOLD_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
-            ) as stream:
-                for chunk in stream.text_stream:
-                    text += chunk
-                    yield {"ok": True, "prefix": "gold", "name": chn_name, "chunk": chunk}
+            for chunk in stream_text(
+                self._client, system=self.GOLD_SYSTEM_PROMPT, prompt=user_prompt, max_tokens=6000
+            ):
+                text += chunk
+                yield {"ok": True, "prefix": "gold", "name": chn_name, "chunk": chunk}
             yield {"ok": True, "prefix": "gold", "name": chn_name, "report": text, "data": context, "done": True}
         except Exception as e:
             yield {"ok": False, "error": str(e), "data": context, "done": True}

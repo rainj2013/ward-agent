@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ward.core.config import get_config
+from ward.services.db.connection import database_connection
+from ward.services.db.migrations import apply_migrations
 
 
 class AnalysisCacheService:
@@ -34,9 +36,8 @@ class AnalysisCacheService:
         self._init_db()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(self._TABLE)
-            conn.commit()
+        with database_connection(self.db_path) as conn:
+            apply_migrations(conn, "analysis_cache", [(1, lambda db: db.execute(self._TABLE))])
 
     def _key(type_: str, id_: str | None = None) -> str:
         """Build cache key: 'type:id' or just 'type' for un-keyed reports."""
@@ -53,6 +54,10 @@ class AnalysisCacheService:
     _DEFAULT_TTL_SECONDS = 300
     _ANALYSIS_TTL_SECONDS = 900
 
+    @staticmethod
+    def _utcnow() -> datetime:
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+
     def _ttl_seconds(self, cache_key: str) -> int:
         if cache_key.startswith(("stock:", "index:")):
             return self._ANALYSIS_TTL_SECONDS
@@ -63,7 +68,7 @@ class AnalysisCacheService:
         Return cached report if it was created within the key-specific TTL.
         Returns dict with 'report' and 'data' keys, or None on miss/expired.
         """
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT report, raw_data, created_at FROM analysis_cache WHERE cache_key = ?",
@@ -75,7 +80,7 @@ class AnalysisCacheService:
 
         # Check TTL expiration
         created = datetime.fromisoformat(row["created_at"])
-        age = (datetime.utcnow() - created).total_seconds()
+        age = (self._utcnow() - created).total_seconds()
         if age > self._ttl_seconds(cache_key):
             return None  # expired
 
@@ -98,11 +103,11 @@ class AnalysisCacheService:
             trade_date = date.today().isoformat()
 
         raw_json = json.dumps(raw_data, ensure_ascii=False, default=str) if raw_data else None
-        now = datetime.utcnow().isoformat()
+        now = self._utcnow().isoformat()
 
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             # Clean up expired entries before writing
-            cutoff = datetime.utcnow().timestamp() - self._ANALYSIS_TTL_SECONDS
+            cutoff = self._utcnow().timestamp() - self._ANALYSIS_TTL_SECONDS
             conn.execute(
                 "DELETE FROM analysis_cache WHERE created_at < ?",
                 (datetime.utcfromtimestamp(cutoff).isoformat(),),

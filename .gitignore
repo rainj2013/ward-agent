@@ -12,6 +12,7 @@ dist/
 
 # Virtual env
 .venv/
+uv.lock
 
 # IDE
 .idea/

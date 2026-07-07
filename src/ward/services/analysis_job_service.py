@@ -8,11 +8,13 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from typing import Any
 
 from ward.core.config import get_config
+from ward.services.db.connection import database_connection
+from ward.services.db.migrations import apply_migrations
 from ward.services.report_verifier import ReportVerifier
 
 
@@ -79,25 +81,8 @@ class AnalysisJobService:
         self._init_db()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(self._JOBS_TABLE)
-            conn.execute(self._EVENTS_TABLE)
-            self._ensure_columns(conn, "analysis_jobs", {
-                "stage": "TEXT",
-                "stage_message": "TEXT",
-                "queue_position": "INTEGER",
-                "duration_ms": "INTEGER",
-                "input_tokens": "INTEGER NOT NULL DEFAULT 0",
-                "output_tokens": "INTEGER NOT NULL DEFAULT 0",
-                "total_tokens": "INTEGER NOT NULL DEFAULT 0",
-                "estimated_cost": "REAL NOT NULL DEFAULT 0",
-                "provider": "TEXT",
-                "model": "TEXT",
-            })
-            self._ensure_columns(conn, "analysis_job_events", {
-                "stage": "TEXT",
-                "duration_ms": "INTEGER",
-            })
+        with database_connection(self.db_path) as conn:
+            apply_migrations(conn, "analysis_jobs", [(1, self._create_job_schema), (2, self._upgrade_job_schema)])
             now = self._now()
             conn.execute(
                 """
@@ -108,6 +93,19 @@ class AnalysisJobService:
                 ("failed", "服务重启，未完成任务已终止", now, now),
             )
             conn.commit()
+
+    def _create_job_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute(self._JOBS_TABLE)
+        conn.execute(self._EVENTS_TABLE)
+
+    def _upgrade_job_schema(self, conn: sqlite3.Connection) -> None:
+        self._ensure_columns(conn, "analysis_jobs", {
+            "stage": "TEXT", "stage_message": "TEXT", "queue_position": "INTEGER",
+            "duration_ms": "INTEGER", "input_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "output_tokens": "INTEGER NOT NULL DEFAULT 0", "total_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "estimated_cost": "REAL NOT NULL DEFAULT 0", "provider": "TEXT", "model": "TEXT",
+        })
+        self._ensure_columns(conn, "analysis_job_events", {"stage": "TEXT", "duration_ms": "INTEGER"})
 
     def _ensure_columns(self, conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
         existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -137,7 +135,7 @@ class AnalysisJobService:
         now = self._now()
         queue_position = self._queue.qsize() + 1
         cfg = get_config()
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO analysis_jobs
@@ -172,7 +170,7 @@ class AnalysisJobService:
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         """Return a job snapshot."""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 """
@@ -218,7 +216,7 @@ class AnalysisJobService:
 
     def get_events(self, job_id: str, after_id: int = 0) -> list[dict[str, Any]]:
         """Return events after an event id."""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -252,8 +250,8 @@ class AnalysisJobService:
 
     def get_stats(self, range_: str = "1d") -> dict[str, Any]:
         """Return aggregate runtime stats for recent jobs."""
-        cutoff = datetime.utcnow() - self._range_delta(range_)
-        with sqlite3.connect(str(self.db_path)) as conn:
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - self._range_delta(range_)
+        with database_connection(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -375,13 +373,13 @@ class AnalysisJobService:
 
     def _mark_running(self, job_id: str) -> None:
         now = self._now()
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.execute(
                 """
                 UPDATE analysis_jobs
                 SET status = ?, stage = ?, stage_message = ?, queue_position = 0,
                     started_at = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = 'queued'
                 """,
                 ("running", "running", "开始执行分析任务", now, now, job_id),
             )
@@ -391,15 +389,15 @@ class AnalysisJobService:
         now = self._now()
         cache_hit = 1 if result.get("cached") else 0
         usage = self._usage_from_result(result)
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(
+        with database_connection(self.db_path) as conn:
+            cursor = conn.execute(
                 """
                 UPDATE analysis_jobs
                 SET status = ?, result = ?, error = NULL, cache_hit = ?,
                     stage = ?, stage_message = ?, duration_ms = ?,
                     input_tokens = ?, output_tokens = ?, total_tokens = ?, estimated_cost = ?,
                     finished_at = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = 'running'
                 """,
                 (
                     "succeeded",
@@ -418,8 +416,9 @@ class AnalysisJobService:
                 ),
             )
             conn.commit()
-        message = "命中缓存，已复用现有分析" if cache_hit else "分析任务完成"
-        self._add_event(job_id, "succeeded", message, "succeeded", {"cache_hit": bool(cache_hit), "usage": usage}, duration_ms)
+        if cursor.rowcount:
+            message = "命中缓存，已复用现有分析" if cache_hit else "分析任务完成"
+            self._add_event(job_id, "succeeded", message, "succeeded", {"cache_hit": bool(cache_hit), "usage": usage}, duration_ms)
 
     def _mark_failed(
         self,
@@ -430,14 +429,14 @@ class AnalysisJobService:
     ) -> None:
         now = self._now()
         usage = self._usage_from_result(result or {})
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(
+        with database_connection(self.db_path) as conn:
+            cursor = conn.execute(
                 """
                 UPDATE analysis_jobs
                 SET status = ?, result = ?, error = ?, stage = ?, stage_message = ?,
                     duration_ms = ?, input_tokens = ?, output_tokens = ?, total_tokens = ?,
                     estimated_cost = ?, finished_at = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('queued', 'running')
                 """,
                 (
                     "failed",
@@ -456,7 +455,8 @@ class AnalysisJobService:
                 ),
             )
             conn.commit()
-        self._add_event(job_id, "failed", error, "failed", {"usage": usage}, duration_ms)
+        if cursor.rowcount:
+            self._add_event(job_id, "failed", error, "failed", {"usage": usage}, duration_ms)
 
     def _add_event(
         self,
@@ -467,7 +467,7 @@ class AnalysisJobService:
         data: dict[str, Any] | None = None,
         duration_ms: int | None = None,
     ) -> None:
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO analysis_job_events (job_id, event, message, stage, data, duration_ms, created_at)
@@ -486,7 +486,7 @@ class AnalysisJobService:
             conn.commit()
 
     def _set_stage(self, job_id: str, stage: str, message: str) -> None:
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.execute(
                 """
                 UPDATE analysis_jobs
@@ -557,4 +557,4 @@ class AnalysisJobService:
 
     @staticmethod
     def _now() -> str:
-        return datetime.utcnow().isoformat()
+        return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()

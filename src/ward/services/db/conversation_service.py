@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ward.core.config import get_config
+from ward.services.db.connection import database_connection
+from ward.services.db.migrations import apply_migrations
 
 
 class ConversationService:
@@ -22,25 +24,31 @@ class ConversationService:
 
     def _init_db(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute("""
+        with database_connection(self.db_path) as conn:
+            apply_migrations(conn, "conversations", [
+                (1, self._create_schema),
+                (2, self._rebuild_without_foreign_keys),
+            ])
+
+    @staticmethod
+    def _create_schema(conn: sqlite3.Connection) -> None:
+        conn.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
             """)
-            conn.execute("""
+        conn.execute("""
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conversation_id INTEGER NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+                    created_at TEXT NOT NULL
                 )
             """)
-            conn.execute("""
+        conn.execute("""
                 CREATE TABLE IF NOT EXISTS conversation_summaries (
                     conversation_id INTEGER PRIMARY KEY,
                     summary TEXT NOT NULL,
@@ -49,15 +57,25 @@ class ConversationService:
                     output_tokens INTEGER DEFAULT 0,
                     total_tokens INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+                    updated_at TEXT NOT NULL
                 )
             """)
-            conn.commit()
+
+    @classmethod
+    def _rebuild_without_foreign_keys(cls, conn: sqlite3.Connection) -> None:
+        """Recreate conversation tables without DB-level relationships.
+
+        Conversation history is local disposable state, so this migration
+        intentionally clears it instead of carrying legacy foreign keys.
+        """
+        conn.execute("DROP TABLE IF EXISTS conversation_summaries")
+        conn.execute("DROP TABLE IF EXISTS messages")
+        conn.execute("DROP TABLE IF EXISTS conversations")
+        cls._create_schema(conn)
 
     def create_conversation(self) -> int:
-        now = datetime.utcnow().isoformat()
-        with sqlite3.connect(str(self.db_path)) as conn:
+        now = self._now()
+        with database_connection(self.db_path) as conn:
             cur = conn.execute(
                 "INSERT INTO conversations (created_at, updated_at) VALUES (?, ?)",
                 (now, now),
@@ -65,9 +83,17 @@ class ConversationService:
             conn.commit()
             return cur.lastrowid
 
+    def conversation_exists(self, conversation_id: int) -> bool:
+        with database_connection(self.db_path) as conn:
+            return conn.execute(
+                "SELECT 1 FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone() is not None
+
     def add_message(self, conversation_id: int, role: str, content: str) -> int:
-        now = datetime.utcnow().isoformat()
-        with sqlite3.connect(str(self.db_path)) as conn:
+        now = self._now()
+        with database_connection(self.db_path) as conn:
+            self._require_conversation(conn, conversation_id)
             cur = conn.execute(
                 "INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                 (conversation_id, role, content, now),
@@ -80,8 +106,8 @@ class ConversationService:
             return cur.lastrowid
 
     def update_message(self, conversation_id: int, message_id: int, role: str, content: str) -> bool:
-        now = datetime.utcnow().isoformat()
-        with sqlite3.connect(str(self.db_path)) as conn:
+        now = self._now()
+        with database_connection(self.db_path) as conn:
             cur = conn.execute(
                 """
                 UPDATE messages
@@ -99,7 +125,7 @@ class ConversationService:
             return cur.rowcount > 0
 
     def get_messages(self, conversation_id: int, limit: int | None = None) -> list[dict[str, Any]]:
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             if limit is None:
                 rows = conn.execute(
@@ -115,7 +141,7 @@ class ConversationService:
             return [dict(row) for row in rows]
 
     def get_summary(self, conversation_id: int) -> dict[str, Any] | None:
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 """
@@ -135,9 +161,10 @@ class ConversationService:
         summarized_until_message_id: int | None,
         usage: dict[str, int] | None = None,
     ) -> None:
-        now = datetime.utcnow().isoformat()
+        now = self._now()
         usage = usage or {}
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
+            self._require_conversation(conn, conversation_id)
             conn.execute(
                 """
                 INSERT INTO conversation_summaries (
@@ -170,9 +197,22 @@ class ConversationService:
             )
             conn.commit()
 
+    @staticmethod
+    def _require_conversation(conn: sqlite3.Connection, conversation_id: int) -> None:
+        exists = conn.execute(
+            "SELECT 1 FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if not exists:
+            raise ValueError(f"Conversation {conversation_id} does not exist")
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
     def get_messages_paginated(self, conversation_id: int, limit: int = 20, before_id: int | None = None) -> tuple[list[dict[str, Any]], bool, int | None]:
         """Fetch messages older than before_id (cursor pagination). Returns (messages, has_more, next_before_id) in ASC order (oldest first)."""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             if before_id is None:
                 # Initial load: get newest messages first (DESC)
@@ -196,7 +236,7 @@ class ConversationService:
             return [dict(row) for row in rows], has_more, next_before_id
 
     def list_conversations(self, limit: int = 20) -> list[dict[str, Any]]:
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with database_connection(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT id, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",

@@ -42,6 +42,8 @@ class AnthropicClient(LLMClientBase):
         self.client = anthropic.AsyncAnthropic(
             base_url=api_base,
             api_key=api_key,
+            timeout=60.0,
+            max_retries=0,
         )
 
     async def _make_api_request(

@@ -12,6 +12,7 @@ import yfinance as yf
 from anthropic import Anthropic
 
 from ward.core.config import get_config
+from ward.core.llm import complete_text, create_anthropic_client, stream_text
 from ward.services.db.analysis_cache_service import AnalysisCacheService
 from ward.services.nasdaq_service import MarketService
 
@@ -23,23 +24,6 @@ def _zero_usage() -> dict[str, Any]:
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
-    }
-
-
-def _extract_llm_usage(response: Any) -> dict[str, Any]:
-    """Normalize Anthropic-compatible usage metadata for runtime stats."""
-    raw = getattr(response, "usage", None)
-    input_tokens = int(getattr(raw, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(raw, "output_tokens", 0) or 0)
-    cache_read = int(getattr(raw, "cache_read_input_tokens", 0) or 0)
-    cache_creation = int(getattr(raw, "cache_creation_input_tokens", 0) or 0)
-    total_input = input_tokens + cache_read + cache_creation
-    return {
-        "provider": "anthropic-compatible",
-        "model": get_config().llm.model,
-        "input_tokens": total_input,
-        "output_tokens": output_tokens,
-        "total_tokens": total_input + output_tokens,
     }
 
 
@@ -118,10 +102,7 @@ class ReportService:
     @property
     def client(self) -> Anthropic:
         if self._client is None:
-            self._client = Anthropic(
-                api_key=self.config.llm.api_key,
-                base_url=self.config.llm.base_url,
-            )
+            self._client = create_anthropic_client()
         return self._client
 
     def _fetch_news(self, symbols: list[str] = None, limit: int = 8) -> list[dict]:
@@ -175,16 +156,11 @@ class ReportService:
                         "messages": [{"role": "user", "content": prompt}],
                     },
                 )
-            response = self.client.messages.create(
-                model=self.config.llm.model,
-                max_tokens=3000,
+            text, usage = complete_text(
+                self.client,
                 system="你是一个客观理性的金融市场情绪分析师。",
-                messages=[{"role": "user", "content": prompt}],
-            )
-            # Handle both TextBlock and ThinkingBlock (newer Claude models)
-            text = "\n".join(
-                block.text if type(block).__name__ == "TextBlock" else ""
-                for block in response.content
+                prompt=prompt,
+                max_tokens=3000,
             )
             # Parse score from response (handles both int like "5/9" and float like "4.5/9")
             score = None
@@ -193,7 +169,6 @@ class ReportService:
                     m = re.search(r'([0-9.]+)\s*/\s*9', line)
                     if m:
                         score = float(m.group(1))
-            usage = _extract_llm_usage(response)
             if trace:
                 trace(
                     "llm_call_end",
@@ -287,17 +262,9 @@ class ReportService:
                         "messages": [{"role": "user", "content": user_prompt}],
                     },
                 )
-            response = self.client.messages.create(
-                model=self.config.llm.model,
-                max_tokens=5000,
-                system=self.SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
+            text, report_usage = complete_text(
+                self.client, system=self.SYSTEM_PROMPT, prompt=user_prompt, max_tokens=5000
             )
-            text = "\n".join(
-                block.text if hasattr(block, "text") else ""
-                for block in response.content
-            )
-            report_usage = _extract_llm_usage(response)
             usage = _sum_usage(sentiment.get("usage"), report_usage)
             if trace:
                 trace(
@@ -368,15 +335,11 @@ class ReportService:
 
         text = ""
         try:
-            with self.client.messages.stream(
-                model=self.config.llm.model,
-                max_tokens=5000,
-                system=self.SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
-            ) as stream:
-                for chunk in stream.text_stream:
-                    text += chunk
-                    yield {"ok": True, "chunk": chunk}
+            for chunk in stream_text(
+                self.client, system=self.SYSTEM_PROMPT, prompt=user_prompt, max_tokens=5000
+            ):
+                text += chunk
+                yield {"ok": True, "chunk": chunk}
             yield {"ok": True, "done": True, "report": text, "data": context}
         except Exception as e:
             yield {"ok": False, "error": str(e), "done": True, "data": context}

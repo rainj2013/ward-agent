@@ -1,0 +1,22 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv run pytest -q
+      - run: uv run python -m compileall -q src run.py
+      - run: node --check static/js/app.js
+      - run: node --check static/js/runtime.js
+      - run: node --check static/js/security.js
+      - run: node --check static/js/settings.js
+      - run: bash -n start.sh restart.sh

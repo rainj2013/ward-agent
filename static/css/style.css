@@ -1462,38 +1462,6 @@ header h1 {
   max-width: 1216px;
 }
 
-/* Local settings */
-.settings-page { max-width: 1080px; }
-.settings-card {
-  max-width: 720px;
-  margin: 1.4rem auto;
-  padding: 1.5rem;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
-}
-.settings-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
-.settings-heading h2 { margin: 0 0 0.4rem; }
-.settings-heading p { margin: 0 0 1.4rem; color: var(--muted); }
-.settings-local-badge { padding: 0.3rem 0.55rem; border: 1px solid var(--accent); border-radius: 999px; color: var(--accent); white-space: nowrap; font-size: 0.75rem; }
-.settings-card form { display: grid; gap: 0.6rem; }
-.settings-card label { margin-top: 0.7rem; color: var(--text); font-weight: 600; }
-.settings-card input {
-  width: 100%;
-  padding: 0.75rem 0.85rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-3);
-  color: var(--text);
-  box-sizing: border-box;
-}
-.settings-card small { color: var(--muted); }
-.settings-priority-note { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.82rem; }
-.settings-actions { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; }
-.settings-actions button { padding: 0.65rem 1.2rem; border: 0; border-radius: 8px; background: var(--accent); color: var(--bg); cursor: pointer; font-weight: 700; }
-.settings-actions button:disabled { opacity: 0.55; cursor: wait; }
-#settings-status.success { color: var(--down); }
-#settings-status.error { color: var(--up); }
 .runtime-page .runtime-subtitle {
   color: var(--muted);
   font-size: 0.94rem;

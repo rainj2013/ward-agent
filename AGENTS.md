@@ -7,12 +7,11 @@ Ward is a Python 3.12 FastAPI application with a vanilla static frontend. Backen
 ## Build, Test, and Development Commands
 
 - `uv sync`: install project dependencies from `pyproject.toml`.
-- `uv run ward`: start the web app on `WEB_PORT` or port `8000`.
+- `uv run python run.py`: start the web app on `WEB_PORT` or port `8000`.
 - `./start.sh`: convenience launcher used by the repo.
 - `./restart.sh`: restart helper for local server workflows.
-- `pip install -e . && ward`: pip-based alternative when `uv` is unavailable.
 
-After starting the app, open `http://localhost:8000`. Configure credentials with `cp .env.example .env`; `MINIMAX_API_KEY` is required for AI features.
+After starting the app, open `http://localhost:8000`. Configure the Anthropic-compatible Base URL, model, and API key through `/settings` or by copying `.env.example` to `.env`.
 
 ## Coding Style & Naming Conventions
 

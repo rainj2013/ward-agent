@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ─── Chat Context Schemas ────────────────────────────────────────────────────
@@ -56,17 +56,17 @@ class ExtendedHoursItem(BaseModel):
 class ChatContext(BaseModel):
     """Full context data from UI — all loaded data is sent for rich AI answers."""
     # Today's snapshot (same as before)
-    indices: list[MarketDataItem] = []
-    stocks: list[StockDataItem] = []
+    indices: list[MarketDataItem] = Field(default_factory=list)
+    stocks: list[StockDataItem] = Field(default_factory=list)
     # 60-day raw kline data keyed by index prefix or stock symbol
-    index_klines: dict[str, list[KlineItem]] = {}
-    stock_klines: dict[str, list[KlineItem]] = {}
+    index_klines: dict[str, list[KlineItem]] = Field(default_factory=dict)
+    stock_klines: dict[str, list[KlineItem]] = Field(default_factory=dict)
     # AI analysis texts keyed by stock symbol
-    stock_analyses: dict[str, str] = {}
+    stock_analyses: dict[str, str] = Field(default_factory=dict)
     # Index AI analysis reports: prefix -> report text
-    index_analyses: dict[str, str] = {}
+    index_analyses: dict[str, str] = Field(default_factory=dict)
     # Extended hours data: prefix -> ExtendedHoursItem
-    extended_hours: dict[str, ExtendedHoursItem] = {}
+    extended_hours: dict[str, ExtendedHoursItem] = Field(default_factory=dict)
 
 
 # ─── Request / Response Schemas ──────────────────────────────────────────────
@@ -144,7 +144,7 @@ class HistoryPaginatedResponse(BaseModel):
 
 class StockSearchResponse(BaseModel):
     ok: bool
-    results: list[dict] = []
+    results: list[dict] = Field(default_factory=list)
 
 
 class StockQuoteResponse(BaseModel):
@@ -157,7 +157,7 @@ class StockHistoryResponse(BaseModel):
     ok: bool
     symbol: str | None = None
     name: str | None = None
-    data: list[dict] = []
+    data: list[dict] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -175,7 +175,7 @@ class StockKlineResponse(BaseModel):
     ok: bool
     symbol: str | None = None
     name: str | None = None
-    data: list[dict] = []
+    data: list[dict] = Field(default_factory=list)
     error: str | None = None
 
 
