@@ -6,7 +6,7 @@ import json
 import asyncio
 import re
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,7 @@ from ward.schemas.models import (
     ExtendedPriceResponse,
     HistoryResponse, HistoryPaginatedResponse,
     IndexAnalysisResponse,
+    LLMSettingsUpdateRequest,
     MarketOverviewResponse,
     MessageResponse,
     QuoteResponse,
@@ -39,6 +40,7 @@ from ward.services.report_service import ReportService
 from ward.services.stock_comparison_service import StockComparisonService
 from ward.services.stock_service import StockService
 from ward.services.stock_symbols import normalize_stock_symbol
+from ward.services.settings_service import SettingsService
 
 router = APIRouter()
 ms = MarketService()
@@ -47,6 +49,7 @@ hs = HistoryService()
 ss = StockService()
 scs = StockComparisonService()
 is_ = IndexService()
+settings_service = SettingsService()
 ajs = AnalysisJobService(concurrency=1)
 ajs.register_handler("stock_analysis", lambda payload: ss.generate_analysis(payload["symbol"], trace=payload.get("_trace")))
 ajs.register_handler("index_analysis", lambda payload: is_.generate_analysis(payload["prefix"], trace=payload.get("_trace")))
@@ -162,6 +165,37 @@ async def home():
 async def runtime_page():
     """Serve the runtime observability page."""
     return FileResponse(str(_static_dir / "runtime.html"))
+
+
+def _require_local_request(request: Request) -> None:
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(status_code=403, detail="Settings are only available from localhost")
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    """Serve the local LLM settings page."""
+    _require_local_request(request)
+    return FileResponse(str(_static_dir / "settings.html"))
+
+
+@router.get("/api/settings/llm")
+async def get_llm_settings(request: Request):
+    """Return effective LLM settings without exposing the API key."""
+    _require_local_request(request)
+    return {"ok": True, "settings": settings_service.get_llm_settings()}
+
+
+@router.put("/api/settings/llm")
+async def update_llm_settings(request: Request, payload: LLMSettingsUpdateRequest):
+    """Persist canonical LLM settings to the project .env file."""
+    _require_local_request(request)
+    try:
+        settings = settings_service.save_llm_settings(payload.base_url, payload.model, payload.api_key)
+        return {"ok": True, "settings": settings}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/api/quote", response_model=QuoteResponse)

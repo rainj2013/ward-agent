@@ -1,10 +1,11 @@
 #!/bin/bash
-# Ward 启动脚本 - 避免 Hermes 安全机制拦截
+# Ward 启动脚本
 
-source "$HOME/.bashrc"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 screen -S ward -X quit 2>/dev/null
 sleep 1
 
-screen -dmS ward /root/.venv/bin/ward
+cd "$SCRIPT_DIR"
+screen -dmS ward "$SCRIPT_DIR/.venv/bin/ward"
 echo "Ward started"

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ward 设置</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="container settings-page">
+    <header>
+      <h1><span class="brand-mark"></span>Ward</h1>
+      <nav class="top-nav" aria-label="主导航">
+        <a href="/">市场概览</a>
+        <a href="/#stock-section">个股分析</a>
+        <a href="/#report-section">市场资讯</a>
+        <a href="/runtime">运行中心</a>
+        <a href="/settings" class="active">设置</a>
+      </nav>
+    </header>
+
+    <div class="runtime-subtitle">本机设置 · LLM API</div>
+
+    <section class="settings-card">
+      <div class="settings-heading">
+        <div>
+          <h2>模型接口</h2>
+          <p>设置写入项目根目录的 <code>.env</code>，不会通过页面返回完整 Key。</p>
+        </div>
+        <span class="settings-local-badge">仅限 localhost</span>
+      </div>
+
+      <form id="llm-settings-form">
+        <label for="settings-base-url">BASE API</label>
+        <input id="settings-base-url" type="url" required placeholder="https://api.example.com/anthropic" autocomplete="url" />
+        <small>保存为 <code>ANTHROPIC_BASE_URL</code></small>
+
+        <label for="settings-model-input">模型</label>
+        <input id="settings-model-input" type="text" required placeholder="例如 deepseek-v4-flash" autocomplete="off" />
+        <small>保存为 <code>LLM_MODEL</code></small>
+
+        <label for="settings-api-key">API Key</label>
+        <input id="settings-api-key" type="password" placeholder="留空则保留当前 Key" autocomplete="new-password" />
+        <small id="settings-key-state">正在读取当前配置...</small>
+
+        <p class="settings-priority-note">Ward 只读取项目根目录的 <code>.env</code>，不会读取启动进程中的环境变量。</p>
+
+        <div class="settings-actions">
+          <button id="settings-save" type="submit">保存设置</button>
+          <span id="settings-status" role="status"></span>
+        </div>
+      </form>
+    </section>
+  </div>
+  <script src="/static/js/settings.js"></script>
+</body>
+</html>

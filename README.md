@@ -95,16 +95,16 @@ cd ward-agent
 cp .env.example .env
 ```
 
-编辑 `.env`，填入你的 MiniMax API Key：
+编辑 `.env`，填入 Anthropic 兼容接口地址和 API Key：
 
 ```env
-MINIMAX_API_KEY=***
+ANTHROPIC_AUTH_TOKEN=***
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 ```
 
-> 支持的环境变量：
-> - `MINIMAX_API_KEY` / `MINIMAX_PORTAL_API_KEY`（必填）
-> - `LLM_MODEL`（可选，默认 `MiniMax-M2.7-highspeed`）
-> - `ANTHROPIC_BASE_URL`（可选，默认 MiniMax 代理地址）
+也可以启动 Ward 后打开 `http://localhost:8000/settings`，在本机设置页保存 BASE API 和 API Key。设置写入被 Git 忽略的 `.env`，重启 Ward 后生效。
+
+Ward 只读取项目根目录的 `.env`，忽略启动进程中的环境变量。文件内 API Key 按 `ANTHROPIC_AUTH_TOKEN`、`DEEPSEEK_API_KEY`、`API_KEY`、`MINIMAX_API_KEY`、`MINIMAX_PORTAL_API_KEY` 的顺序取第一个非空值，BASE API 按 `ANTHROPIC_BASE_URL`、`DEEPSEEK_API_URL`、`URL` 的顺序取值。模型使用 `LLM_MODEL`，默认 `deepseek-v4-flash`。
 
 ### 3. 安装依赖并运行
 

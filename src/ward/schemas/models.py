@@ -103,6 +103,12 @@ class ChatMessageUpdateRequest(BaseModel):
     content: str
 
 
+class LLMSettingsUpdateRequest(BaseModel):
+    base_url: str
+    model: str
+    api_key: str | None = None
+
+
 class MessageResponse(BaseModel):
     id: int | None = None
     role: str
